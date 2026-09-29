@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="https://github.com/douyin-tizen/douyin-tizen"
+        version="0.0.1"
+        viewmodes="maximized">
+
+    <tizen:application id="DouYinTv00.DouyinTv"
+                       package="DouYinTv00"
+                       required_version="6.0"/>
+
+    <!-- 和 bilibili 一样：这条访问策略在 Tizen 上取代浏览器的 CORS 模型。 -->
+    <access origin="*" subdomains="true"/>
+    <!-- 签名桥（js/bridge.js）要把 www.douyin.com 装进隐藏的子框架。 -->
+    <tizen:allow-navigation>www.douyin.com</tizen:allow-navigation>
+
+    <content src="index.html"/>
+
+    <!-- 默认策略是 default-src *; script-src 'self'; style-src 'self'; object-src 'none'（设备上
+         securitypolicyviolation 报出来的原文）。图片落在 default-src *，而 * 不含 data: ——
+         登录页的二维码是一张 data:image/png，搬到我们界面上就成了破图标（2026-09-29）。
+         其余照抄默认，只给图片加 data:。 -->
+    <tizen:content-security-policy>default-src *; script-src 'self'; style-src 'self'; object-src 'none'; img-src * data:</tizen:content-security-policy>
+    <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"/>
+    <icon src="icon.png"/>
+    <name>douyin</name>
+    <description>Douyin for Samsung TV</description>
+
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+    <!-- 退出登录要清空引擎的全局 cookie jar（会话 cookie 是 HttpOnly，脚本碰不到）。
+         没有它 tizen.websetting.removeAllCookies 会失败，account.js 会照实报出来。 -->
+    <tizen:privilege name="http://tizen.org/privilege/websetting"/>
+
+    <tizen:profile name="tv-samsung"/>
+    <tizen:setting screen-orientation="landscape"
+                   context-menu="disable"
+                   background-support="disable"
+                   encryption="disable"
+                   install-location="auto"
+                   hwkey-event="enable"/>
+</widget>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="https://github.com/douyin-tizen/spike"
+        version="0.0.1"
+        viewmodes="maximized">
+
+    <tizen:application id="DouYinSpk0.DouyinSpike"
+                       package="DouYinSpk0"
+                       required_version="6.0"/>
+
+    <!-- 和 bilibili 一样：这条访问策略在 Tizen 上取代浏览器的 CORS 模型。 -->
+    <access origin="*" subdomains="true"/>
+    <!-- iframe 实验要把 www.douyin.com 装进子框架。 -->
+    <tizen:allow-navigation>www.douyin.com</tizen:allow-navigation>
+
+    <content src="index.html"/>
+    <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"/>
+    <icon src="icon.png"/>
+    <name>douyin-spike</name>
+    <description>douyin feasibility spike</description>
+
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+
+    <tizen:profile name="tv-samsung"/>
+    <tizen:setting screen-orientation="landscape"
+                   context-menu="disable"
+                   background-support="disable"
+                   encryption="disable"
+                   install-location="auto"
+                   hwkey-event="enable"/>
+</widget>

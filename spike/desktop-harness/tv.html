@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<title>tv emu</title>
+<pre id="o"></pre>
+<script>
+// 模拟 widget：页面不在 douyin.com，跨域直连 www.douyin.com（浏览器已关跨域检查），cookie 进引擎自己的 jar。
+function log(s) { console.log('PAGE ' + s); }
+window.onerror = function (m) { log('onerror ' + m); };
+function load(src) { return new Promise(function (ok, bad) { var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = function () { bad(src); }; document.head.appendChild(s); }); }
+var D = 'https://www.douyin.com';
+var Q = 'device_platform=webapp&aid=6383&channel=channel_pc_web&count=10&refresh_index=1&video_type_select=1&version_code=170400&version_name=17.4.0&pc_client_type=1&cookie_enabled=true&platform=PC';
+var MODE = location.hash.slice(1) || 'glue';
+function feed(tag) {
+  return new Promise(function (ok) {
+    var x = new XMLHttpRequest();
+    x.open('GET', D + '/aweme/v1/web/tab/feed/?' + Q);
+    x.withCredentials = true;
+    x.onload = function () {
+      var n = '?', first = ''; try { var j = JSON.parse(x.responseText); n = (j.aweme_list || []).length; first = j.aweme_list && j.aweme_list[0] ? (j.aweme_list[0].desc || '').slice(0, 20) : ''; } catch (e) {}
+      var u = new URL(x.responseURL || D);
+      log(tag + ' status=' + x.status + ' len=' + x.responseText.length + ' items=' + n + ' head=' + x.responseText.slice(0, 10) + ' first=' + first + ' | 加上的参数=' + ['a_bogus', 'msToken', 'webid', 'uifid', 'verifyFp', 'fp'].filter(function (k) { return u.searchParams.has(k); }).join(','));
+      ok();
+    };
+    x.onerror = function () { log(tag + ' XHR error'); ok(); };
+    x.send();
+  });
+}
+function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+function ttwid() {
+  return new Promise(function (ok) {
+    var x = new XMLHttpRequest();
+    x.open('POST', 'https://ttwid.bytedance.com/ttwid/union/register/');
+    x.setRequestHeader('content-type', 'application/json');
+    x.onload = function () {
+      var cb = ''; try { cb = JSON.parse(x.responseText).redirect_url; } catch (e) {}
+      if (!cb) { log('ttwid register failed ' + x.status); return ok(); }
+      var y = new XMLHttpRequest(); y.open('GET', cb); y.withCredentials = true;
+      y.onload = function () { log('ttwid callback ' + y.status); ok(); };
+      y.onerror = function () { log('ttwid callback error'); ok(); };
+      y.send();
+    };
+    x.onerror = function () { log('ttwid register error'); ok(); };
+    x.send(JSON.stringify({region: 'cn', aid: 6383, needFid: false, service: 'www.douyin.com', migrate_info: {ticket: '', source: 'node'}, cbUrlProtocol: 'https', union: true}));
+  });
+}
+(async function () {
+  if (MODE !== 'nottwid') await ttwid();
+  try {
+    await load('https://lf-security.bytegoofy.com/obj/security-secsdk/runtime_bundler_34_v2.js');
+    await load('https://lf-c-flwb.bytetos.com/obj/rc-client-security/c-webmssdk/1.0.0.20/webmssdk.es5.js');
+    await load('https://lf-c-flwb.bytetos.com/obj/rc-client-security/web/glue/1.0.0.64-fix.01/sdk-glue.js');
+    log('sdk loaded, _SdkGlueInit=' + typeof window._SdkGlueInit);
+    var paths = ['^/webcast/', '^/aweme/v1/', '^/aweme/v2/', '/douplus/', '^/api/ad/v1/inspire', '/v1/message/send', '^/live/', '^/captcha/', '^/ecom/', '^/luna/pc'];
+    window._SdkGlueInit({
+      self: {aid: 6383, pageId: 6241},
+      bdms: {aid: 6383, pageId: 6241, paths: paths, boe: false, ddrt: 8.5, ic: 8.5},
+      verifyCenter: {interceptPathList: {include: paths, exclude: ['^/aweme/v1/play/', 'douyinvod\\.com']}, commonOptions: {aid: 6383, pageId: 6241}, nocaptchaOptions: {enabled: true}, captchaOptions: {ele: 'captcha_container', showMode: 'mask'}}
+    }, {
+      verifyCenter: {srcList: ['https://lf-rc1.yhgfb-cn-static.com/obj/rc-verifycenter/sec_sdk_build/4.0.28/captcha/index.js']},
+      bdms: {srcList: ['https://p-pc-weboff.byteimg.com/tos-cn-i-9r5gewecjs/bdms_1.0.1.19_fix.js']}
+    });
+    log('glue init called');
+  } catch (e) { log('load failed ' + e); }
+  for (var w = 0; w < 20 && typeof window.bdms === 'undefined'; w++) await wait(500);
+  log('bdms=' + typeof window.bdms + ' cookies(可见)=' + document.cookie.length);
+  if (MODE === 'hist') {
+    await new Promise(function (ok) { var x = new XMLHttpRequest(); x.open('GET', D + '/aweme/v1/web/history/read/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&version_code=170400&version_name=17.4.0&cookie_enabled=true&platform=PC&max_cursor=0&count=1'); x.withCredentials = true; x.onload = function () { log('匿名 history/read → ' + x.responseText.slice(0, 120)); ok(); }; x.send(); });
+    await new Promise(function (ok) { var x = new XMLHttpRequest(); x.open('GET', D + '/aweme/v1/web/notice/count/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&version_code=170400&version_name=17.4.0&cookie_enabled=true&platform=PC'); x.withCredentials = true; x.onload = function () { log('匿名 notice/count → ' + x.responseText.slice(0, 120)); ok(); }; x.send(); });
+    log('done'); return;
+  }
+  await feed('第1次');
+  await wait(2000);
+  await feed('第2次');
+  await wait(2000);
+  await feed('第3次');
+  log('done');
+})();
+</script>

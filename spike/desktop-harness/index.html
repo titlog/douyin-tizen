@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bdms harness</title>
+<pre id="o"></pre>
+<script src="https://p-pc-weboff.byteimg.com/tos-cn-i-9r5gewecjs/bdms_1.0.1.19_fix.js"></script>
+<script>
+function log(s) { document.getElementById('o').textContent += s + '\n'; var x = new XMLHttpRequest(); x.open('POST', '/log'); x.send(s); }
+window.onerror = function (m) { log('onerror ' + m); };
+bdms.init({aid: 6383, pageId: 6241, paths: ['^/aweme/v1/', '^/aweme/v2/'], boe: false});
+
+// verifyFp：官网格式 verify_<base36 毫秒>_<8>_<4>_<4>_<4>_<12>
+function verifyFp() {
+  var c = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'.split(''), o = [];
+  for (var i = 0; i < 36; i++) o[i] = c[Math.floor(Math.random() * 62)];
+  o[8] = o[13] = o[18] = o[23] = '_'; o[14] = '4';
+  return 'verify_' + Date.now().toString(36) + '_' + o.join('');
+}
+var FP = verifyFp();
+var CV = (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [0, '120.0.0.0'])[1];
+var BASE = 'device_platform=webapp&aid=6383&channel=channel_pc_web&count=10&refresh_index=1&video_type_select=1&version_code=170400&version_name=17.4.0&pc_client_type=1&cookie_enabled=true&platform=PC';
+var FULL = BASE + '&update_version_code=170400&pc_libra_divert=Mac&support_h265=1&support_dash=1&cpu_core_num=' + (navigator.hardwareConcurrency || 8) +
+  '&screen_width=' + screen.width + '&screen_height=' + screen.height + '&browser_language=' + navigator.language + '&browser_platform=' + navigator.platform +
+  '&browser_name=Chrome&browser_version=' + CV + '&browser_online=true&engine_name=Blink&engine_version=' + CV + '&os_name=Mac+OS&os_version=10.15.7&device_memory=8&downlink=10&effective_type=4g&round_trip_time=50';
+var CASES = [
+  ['基础参数 · 无cookie', BASE, ''],
+  ['全参数 · 无cookie', FULL, ''],
+  ['全参数+fp · 无cookie', FULL + '&verifyFp=' + FP + '&fp=' + FP, ''],
+  ['全参数+fp · s_v_web_id', FULL + '&verifyFp=' + FP + '&fp=' + FP, 'svweb'],
+  ['全参数+fp · s_v_web_id+ttwid', FULL + '&verifyFp=' + FP + '&fp=' + FP, 'svweb+ttwid'],
+  ['全参数 · ttwid', FULL, 'ttwid']
+];
+var i = 0;
+function next() {
+  if (i >= CASES.length) { log('done'); return; }
+  var c = CASES[i++];
+  var x = new XMLHttpRequest();
+  x.open('GET', '/aweme/v1/web/tab/feed/?' + c[1]);
+  x.setRequestHeader('X-Case', encodeURIComponent(c[0]));
+  x.setRequestHeader('X-Cookie', c[2]);
+  x.setRequestHeader('X-Fp', FP);
+  x.onload = function () {
+    var n = '?'; try { n = (JSON.parse(x.responseText).aweme_list || []).length; } catch (e) {}
+    log(c[0] + ' → ' + x.status + ' len=' + x.responseText.length + ' items=' + n + ' head=' + x.responseText.slice(0, 10));
+    setTimeout(next, 1500);
+  };
+  x.send();
+}
+setTimeout(next, 1500);
+</script>

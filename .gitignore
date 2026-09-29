@@ -1,0 +1,10 @@
+node_modules/
+ttwid.txt
+*.wgt
+.sign/
+.buildResult/
+.manifest.tmp
+author-signature.xml
+signature*.xml
+spike/desktop-harness/*.png
+.DS_Store

@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>tv login emu</title>
+<style>
+  body { background: #111; color: #ddd; font: 18px sans-serif; }
+  #qr { width: 320px; height: 320px; background: #fff; display: block; margin: 20px; }
+  iframe { position: absolute; left: 380px; top: 0; width: 1280px; height: 800px; border: 0; }
+</style>
+<img id="qr" alt="">
+<pre id="o"></pre>
+<script>
+// 隐藏框里开官网精选页，让官网自己弹登录框；我们只取二维码图片、读状态文字。
+function log(s) { console.log('PAGE ' + s); document.getElementById('o').textContent += s + '\n'; }
+var f = document.createElement('iframe');
+f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+f.src = decodeURIComponent(location.hash.slice(1)) || 'https://www.douyin.com/jingxuan';
+document.body.appendChild(f);
+var t0 = Date.now(), lastSrc = '', lastText = '';
+setInterval(function () {
+  var d;
+  try { d = f.contentDocument; } catch (e) { log('框不可访问 ' + e.message); return; }
+  if (!d) { return; }
+  var info = (d.location && d.location.href) + ' | title=' + d.title + ' | body=' + (d.body ? d.body.innerText.length : -1) + '字';
+  if (info !== window.__info) { window.__info = info; log('框: ' + info); }
+  if (!window.__dumped && Date.now() - t0 > 9000) {
+    window.__dumped = true;
+    var all = d.querySelectorAll('img,canvas,svg');
+    for (var q = 0; q < all.length; q++) { var rr = all[q].getBoundingClientRect(); if (rr.width < 60) { continue; }
+      log('元素 ' + all[q].tagName + ' ' + Math.round(rr.width) + 'x' + Math.round(rr.height) + ' class=' + String(all[q].className && all[q].className.baseVal !== undefined ? all[q].className.baseVal : all[q].className).slice(0, 60) + ' src=' + String(all[q].src || '').slice(0, 50)); }
+    log('正文: ' + d.body.innerText.replace(/\s+/g, ' ').slice(0, 200));
+  }
+  var imgs = d.querySelectorAll('img[src^="data:image"]');
+  var qr = null;
+  for (var i = 0; i < imgs.length; i++) { var r = imgs[i].getBoundingClientRect(); if (r.width >= 100 && Math.abs(r.width - r.height) < 10) { qr = imgs[i]; } }
+  if (qr && qr.src !== lastSrc) {
+    lastSrc = qr.src;
+    document.getElementById('qr').src = qr.src;
+    log('拿到二维码 @' + (Date.now() - t0) + 'ms ' + qr.src.length + '字符 尺寸=' + Math.round(qr.getBoundingClientRect().width) + ' class=' + qr.className);
+    // 往上找面板容器，记下它的文字（状态提示在里面）
+    var p = qr; for (var k = 0; k < 6 && p.parentElement; k++) { p = p.parentElement; }
+    window.__panel = p;
+  }
+  if (window.__panel) {
+    var txt = window.__panel.innerText.replace(/\s+/g, ' ').slice(0, 160);
+    if (txt !== lastText) { lastText = txt; log('面板文字: ' + txt); }
+  }
+}, 1000);
+</script>

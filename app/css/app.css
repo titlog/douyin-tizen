@@ -1,0 +1,93 @@
+html, body {
+  margin: 0; width: 1920px; height: 1080px; overflow: hidden;
+  background: #000; color: #fff;
+  font-family: "SamsungOne", "Noto Sans CJK SC", sans-serif;
+}
+
+/* 竖屏视频两侧：48×27 的画布拉伸到全屏，缩小即模糊；压暗用 opacity 叠黑底。
+ * 这里不许用 filter —— 实测每次切换多一秒多，见 app.js 的 paintBackground。 */
+#bgc { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; opacity: 0.45; }
+
+video {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px;
+  object-fit: contain; background: transparent;
+}
+
+/* 切换瞬间盖在视频上的封面，出画面就撤。 */
+/* 黑底：不然竖屏封面两侧会透出上一条视频残留的最后一帧。不带模糊，见 app.js。 */
+#cover { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; background: #000; display: none; }
+#cover.show { display: block; }
+#cover .img { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: center / contain no-repeat; }
+
+/* 登录框：官网的 login_page。放在屏幕内、完全透明、压在我们的登录界面下面 —— 挪到屏幕
+ * 外的跨域框会被 Chromium 节流（定时器、渲染降频），拖慢官网出码。要有真实尺寸，
+ * login.js 按二维码图片的大小认它。 */
+iframe.login-frame { position: absolute; left: 0; top: 0; width: 1280px; height: 800px; border: 0; opacity: 0; pointer-events: none; z-index: 1; }
+
+/* 桥接框：必须在文档里才加载，但观众不该看见它。 */
+iframe.bridge { position: absolute; left: 0; top: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
+
+#info {
+  position: absolute; left: 80px; bottom: 70px; width: 900px;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+  opacity: 0; transition: opacity 0.4s;
+}
+#info.show { opacity: 1; }
+#author { font-size: 38px; font-weight: bold; margin-bottom: 14px; }
+#desc {
+  font-size: 30px; line-height: 1.45; max-height: 3em; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+#stats { font-size: 26px; margin-top: 14px; opacity: 0.85; }
+#time { font-size: 24px; margin-top: 8px; opacity: 0.7; }
+
+#progress { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: rgba(255, 255, 255, 0.15); }
+#bar { height: 100%; width: 0; background: #fe2c55; }
+
+#paused {
+  position: absolute; left: 50%; top: 50%; width: 160px; height: 160px; margin: -80px 0 0 -80px;
+  border-radius: 80px; background: rgba(0, 0, 0, 0.45);
+  font-size: 64px; line-height: 160px; text-align: center; letter-spacing: -8px;
+  display: none;
+}
+#paused.show { display: block; }
+
+#loading { position: absolute; left: 50%; top: 50%; margin: -40px 0 0 -100px; width: 200px; text-align: center; display: none; }
+#loading.show { display: block; }
+#loading .dot { display: inline-block; width: 26px; height: 26px; border-radius: 13px; margin: 0 4px; animation: bob 0.9s infinite alternate; }
+#loading .a { background: #25f4ee; }
+#loading .b { background: #fe2c55; animation-delay: 0.45s; }
+#loading .label { margin-top: 18px; font-size: 26px; opacity: 0.8; }
+@keyframes bob { from { transform: translateY(-8px); } to { transform: translateY(8px); } }
+
+#toast {
+  z-index: 10;
+  position: absolute; left: 50%; top: 80px; transform: translateX(-50%);
+  padding: 18px 40px; border-radius: 40px; background: rgba(0, 0, 0, 0.7);
+  font-size: 30px; opacity: 0; transition: opacity 0.3s;
+}
+#toast.show { opacity: 1; }
+
+/* 顶部标签栏：和信息层一起出现、一起淡出；非视频页上常驻。 */
+#tabs {
+  position: absolute; left: 0; right: 0; top: 36px; text-align: center; z-index: 5;
+  opacity: 0; transition: opacity 0.4s; text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+}
+#tabs.show { opacity: 1; }
+#tabs .tab { display: inline-block; margin: 0 34px; font-size: 34px; color: rgba(255, 255, 255, 0.6); padding-bottom: 8px; }
+#tabs .tab.on { color: #fff; font-weight: bold; border-bottom: 5px solid #fff; }
+
+/* 登录 / 我 / 空页：盖在视频层上的整屏面板。 */
+#login, #me, #empty {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: #161823;
+  text-align: center; display: none; z-index: 2;
+}
+#login.show, #me.show, #empty.show { display: block; }
+#login-title { margin-top: 170px; font-size: 44px; font-weight: bold; }
+.qr-box { width: 440px; height: 440px; margin: 50px auto 0; background: #fff; border-radius: 20px; padding: 20px; box-sizing: border-box; }
+#qr { width: 400px; height: 400px; image-rendering: pixelated; visibility: hidden; }
+#login-msg { margin-top: 40px; font-size: 32px; min-height: 44px; }
+#me-msg { margin-top: 380px; font-size: 48px; font-weight: bold; }
+#me-hint { margin-top: 30px; font-size: 30px; opacity: 0.8; }
+#empty-msg { margin-top: 440px; font-size: 38px; }
+.hint { margin-top: 30px; font-size: 24px; opacity: 0.5; }

@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920">
+<title>抖音</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<canvas id="bgc" width="48" height="27"></canvas>
+<video id="va"></video>
+<div id="cover"><div class="img"></div></div>
+
+<div id="info">
+  <div id="author"></div>
+  <div id="desc"></div>
+  <div id="stats"></div>
+  <div id="time"></div>
+</div>
+<div id="tabs"></div>
+
+<div id="login">
+  <div id="login-title"></div>
+  <div class="qr-box"><img id="qr" alt=""></div>
+  <div id="login-msg"></div>
+  <div class="hint">左右键切换标签</div>
+</div>
+<div id="me">
+  <div id="me-msg"></div>
+  <div id="me-hint"></div>
+</div>
+<div id="empty">
+  <div id="empty-msg"></div>
+  <div class="hint">按确认键重试，左右键切换标签</div>
+</div>
+
+<div id="progress"><div id="bar"></div></div>
+<div id="paused">❚❚</div>
+<div id="loading"><div class="dot a"></div><div class="dot b"></div><div class="label">正在加载…</div></div>
+<div id="toast"></div>
+
+<script src="js/config.js"></script>
+<script src="js/log.js"></script>
+<script src="js/bridge.js"></script>
+<script src="js/feed.js"></script>
+<script src="js/account.js"></script>
+<script src="js/login.js"></script>
+<script src="js/player.js"></script>
+<script src="js/app.js"></script>
+<script src="js/selftest.js"></script>
+</body>
+</html>
