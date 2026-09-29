@@ -19,6 +19,7 @@ video {
 #cover { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; display: none; }
 #cover.show { display: block; }
 #cover .img { position: absolute; background: center / cover no-repeat; will-change: transform; }
+
 /* 切换中：背景画布提到视频上面，挡住上一条残留的最后一帧；封面在它上面。第一帧上屏后放下。 */
 video { z-index: 0; }
 #mask.over { z-index: 1; }

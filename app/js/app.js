@@ -44,6 +44,10 @@
     /* 预热方式。"blob"（整段下进内存）在 2026-09-29 的对照里只快一两百毫秒、而且多数视频
      * 32–216MB 太大用不上，见 CLAUDE.md；代码留着，默认用 "range"。 */
     var PRELOAD_MODE = "range";
+    var pushTimer = 0;        // 往上推的动画结束后才换源
+    /* "video"：旧视频元素自己滑走（真的推）；"cover"：旧视频原地继续播，新封面从下面盖上来。
+     * 设备实测移动 <video> 会让随后的起播慢 0.3–0.4 秒（见 CLAUDE.md），两种都留着。 */
+    var PUSH_MODE = "cover";
     var bootAt = Date.now();
     var bootMarks = {};
     var bootTold = false;
@@ -91,6 +95,8 @@
         $("empty").className = v === "empty" ? "show" : "";
         if (v !== "feed") {
             $("cover").className = "";
+            clearTimeout(pushTimer);
+            resetSlide($("va"));
             $("mask").className = "";
             $("info").className = "";
             $("loading").className = "";
@@ -126,12 +132,13 @@
      *   - 竖屏视频两侧是纯黑（用户要求：封面拉伸出来的模糊彩色背景抢注意力）。
      * **切换时画面上不许有 CSS 滤镜**：一层 blur(40px) 实测让每次切换多一秒多（见 CLAUDE.md）。
      * 「封面」那行日志报图用了多久、封面比例和视频比例。 */
-    function render(item, dir) {
+    function render(item, dir, pushing) {
         $("author").textContent = item.author ? "@" + item.author : "";
         $("desc").textContent = item.desc;
         $("stats").textContent = "♥ " + count(item.likes) + "   💬 " + count(item.comments);
-        var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false};
-        $("mask").className = "over";
+        var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false, push: !!pushing};
+        /* 推的时候旧视频还在滑，黑幕不能先盖上去 —— 换源那一刻（show 里）再盖。 */
+        if (!pushing) { $("mask").className = "over"; }
         var box = fitBox(item.w, item.h);
         var im = $("cover").lastChild;
         im.style.left = box.l + "px"; im.style.top = box.t + "px";
@@ -155,10 +162,22 @@
         showInfo();
     }
 
-    /* 上滑动画：新封面从屏幕外滑进来（下一条从底部，上一条从顶部），0.25 秒。它不让视频更快出来，
-     * 而是把解码器冷启动的那段等待藏在动画里 —— 按键那一刻屏幕就在动。只用 transform（合成层
-     * 上做，不重新光栅化）；**不许加滤镜**，见 render 的注释。旧画面不跟着滑走：那得把新视频的
-     * 加载推迟 0.25 秒，反而更慢。 */
+    /* 「往上推」：旧视频往外滑、新封面同时从另一头推进来，0.25 秒，动画结束才换源。
+     *
+     * 走过的两条路：① 只让新封面滑进来、旧画面直接被黑幕盖掉 —— 用户看到「整个屏幕闪一下、黑
+     * 一下」；② 按键那一刻把旧视频的当前帧 drawImage 到画布上、让截图去滑 —— 13 次可读的截图中心
+     * 亮度全是 0（2026-09-29 设备实测）：视频走硬件视频层，画布拿不到帧，滑走的是一块黑板。
+     * 现在让 <video> 元素自己滑。代价是换源晚 0.25 秒（按键那一刻画面就在动）。硬件视频层会不会
+     * 跟着 CSS transform 平滑移动，日志量不出来，只能看。只用 transform；**不许加滤镜**。 */
+    function slideOut(el, dir) {
+        el.style.transition = "transform 250ms cubic-bezier(0.2, 0.8, 0.2, 1)";
+        el.style.transform = dir === "up" ? "translateY(-1080px)" : "translateY(1080px)";
+    }
+    function resetSlide(el) {
+        el.style.transition = "none";
+        el.style.transform = "none";
+    }
+
     function slideIn(el, dir) {
         el.style.transition = "none";
         el.style.transform = dir === "up" ? "translateY(1080px)" : dir === "down" ? "translateY(-1080px)" : "none";
@@ -169,9 +188,24 @@
     }
 
     function show(item, startAt, dir) {
-        render(item, dir);
+        var v = $("va");
         clearTimeout(preloadTimer);
-        Player.play(item, TABS[tab].name, startAt);
+        /* 连按时上一次的推还没推完：直接收尾，别让两段动画叠在一起。 */
+        clearTimeout(pushTimer);
+        resetSlide(v);
+        var ps = Player.state();
+        var pushing = !!dir && ps.shown && !!ps.vw;
+        render(item, dir, pushing);
+        if (!pushing) {
+            Player.play(item, TABS[tab].name, startAt);
+            return;
+        }
+        if (PUSH_MODE === "video") { slideOut(v, dir); }
+        pushTimer = setTimeout(function () {
+            $("mask").className = "over";
+            resetSlide(v);
+            Player.play(item, TABS[tab].name + "·推(" + PUSH_MODE + ")", startAt);
+        }, 250);
     }
 
     /* 画面起来 1.5 秒后再预热下一条（只是 XHR，不碰解码器，见 player.js）：别和正在起播的
@@ -373,7 +407,7 @@
             var ar = function (x) { return x ? x.toFixed(2) : "?"; };
             Log.report("封面", (sw.coverMs < 0 ? "出画面时图还没到" : "图 " + sw.coverMs + "ms 到") + "（" + (sw.item.coverKind || "缓存条目") + "），比例 封面 " + ar(sw.ar) +
                        " / 接口给的视频 " + ar(sw.item.h ? sw.item.w / sw.item.h : 0) + " / 实际解码 " + ar(ps.vh ? ps.vw / ps.vh : 0) +
-                       " | 撤封面：" + how + "，比 playing 晚 " + lateMs + "ms");
+                       " | 撤封面：" + how + "，比 playing 晚 " + lateMs + "ms" + (sw.push ? " | 推" : ""));
         }
     });
     Player.on("ended", function () { next("播完"); });
