@@ -4,9 +4,9 @@ html, body {
   font-family: "SamsungOne", "Noto Sans CJK SC", sans-serif;
 }
 
-/* 竖屏视频两侧：48×27 的画布拉伸到全屏，缩小即模糊；压暗用 opacity 叠黑底。
- * 这里不许用 filter —— 实测每次切换多一秒多，见 app.js 的 paintBackground。 */
-#bgc { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; opacity: 0.45; }
+/* 切换时挡住上一条残留最后一帧的黑幕，平时沉在视频下面。竖屏视频两侧就是纯黑 —— 用户要求：
+ * 之前那层封面拉伸出来的模糊彩色背景抢注意力（2026-09-29）。 */
+#mask { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: #000; }
 
 video {
   position: absolute; left: 0; top: 0; width: 1920px; height: 1080px;
@@ -14,10 +14,15 @@ video {
 }
 
 /* 切换瞬间盖在视频上的封面，出画面就撤。 */
-/* 黑底：不然竖屏封面两侧会透出上一条视频残留的最后一帧。不带模糊，见 app.js。 */
-#cover { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; background: #000; display: none; }
+/* 切换时盖在视频区域上的封面：透明底（两侧露出背景画布），.img 由 app.js 摆到视频将要占的
+ * 那块区域、cover 裁切。**切换时画面上不许有 CSS 滤镜**：一层 blur(40px) 实测让每次切换多一秒多，见 CLAUDE.md。 */
+#cover { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; display: none; }
 #cover.show { display: block; }
-#cover .img { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: center / contain no-repeat; }
+#cover .img { position: absolute; background: center / cover no-repeat; will-change: transform; }
+/* 切换中：背景画布提到视频上面，挡住上一条残留的最后一帧；封面在它上面。第一帧上屏后放下。 */
+video { z-index: 0; }
+#mask.over { z-index: 1; }
+#cover { z-index: 1; }
 
 /* 登录框：官网的 login_page。放在屏幕内、完全透明、压在我们的登录界面下面 —— 挪到屏幕
  * 外的跨域框会被 Chromium 节流（定时器、渲染降频），拖慢官网出码。要有真实尺寸，
@@ -41,7 +46,9 @@ iframe.bridge { position: absolute; left: 0; top: 0; width: 1px; height: 1px; bo
 #stats { font-size: 26px; margin-top: 14px; opacity: 0.85; }
 #time { font-size: 24px; margin-top: 8px; opacity: 0.7; }
 
-#progress { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: rgba(255, 255, 255, 0.15); }
+/* 进度条只在暂停时出来（用户要求：播放时底部一条进度是打扰）。 */
+#progress { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: rgba(255, 255, 255, 0.15); display: none; }
+#progress.show { display: block; }
 #bar { height: 100%; width: 0; background: #fe2c55; }
 
 #paused {

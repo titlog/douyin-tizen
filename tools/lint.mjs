@@ -1,0 +1,128 @@
+/* Catch what `node --check` cannot: code that parses but refers to things that
+ * do not exist.
+ *
+ * 抄自 bilibili-tizen 的 tools/lint.mjs。这里第一次用上是 2026-09-29：按「从一段注释开头删到
+ * show()」删掉旧背景画布时，把夹在中间的 render() 和 fitBox() 一起带走了。每个文件都能解析，
+ * 电视上的症状是第一条视频永远不出画面、没有任何报错（异常发生在 Promise 回调里，onerror 接不到）。
+ *
+ *   node tools/lint.mjs
+ */
+import fs from "fs";
+import path from "path";
+import vm from "vm";
+
+const APP = new URL("../app/js/", import.meta.url).pathname;
+
+/* Load order matters: the app is a series of plain scripts sharing globals.
+ *
+ * Read from index.html rather than listed here. The hand-kept list had silently
+ * fallen two files behind — `selftest.js` and `updater.js` shipped unchecked,
+ * which is precisely the gap this tool exists to close: a call to something
+ * that does not exist parses fine and fails only on the sofa. Same lesson as
+ * deploy.sh deriving the wgt name from the build instead of hardcoding it. */
+const INDEX = new URL("../app/index.html", import.meta.url).pathname;
+const ORDER = [...fs.readFileSync(INDEX, "utf8")
+  .matchAll(/<script\s+src="js\/([^"]+)"><\/script>/g)].map((m) => m[1]);
+
+if (!ORDER.length) {
+  console.error("✗ index.html 里没找到任何 js/ 脚本标签 — lint 什么都没检查");
+  process.exit(1);
+}
+for (const f of ORDER) {
+  if (!fs.existsSync(path.join(APP, f))) {
+    console.error(`✗ index.html 引用了 js/${f}，但文件不存在`);
+    process.exit(1);
+  }
+}
+
+/* Browser and Tizen surface the app is allowed to assume. */
+const HOST = [
+  "window", "document", "navigator", "location", "localStorage", "console",
+  "XMLHttpRequest", "MediaSource", "URL", "Image", "setTimeout", "clearTimeout",
+  "setInterval", "clearInterval", "Math", "JSON", "Date", "String", "Number",
+  "Boolean", "Array", "Object", "RegExp", "Error", "parseInt", "parseFloat",
+  "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent", "escape",
+  "unescape", "btoa", "atob", "Uint8Array", "Uint8ClampedArray", "ArrayBuffer",
+  "DataView", "Promise", "Blob", "Function", "fetch", "performance",
+  "tizen", "webapis",
+];
+
+let failed = false;
+
+/* A sandbox that answers for anything, so evaluation reaches the whole file
+ * without a real DOM, and records which globals each file defines. */
+/* Comments and string literals mention functions too — "view()" in prose is not
+ * a call — so they come out before anything is counted. */
+function strip(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
+}
+
+function scanFile(file, known) {
+  const src = strip(fs.readFileSync(path.join(APP, file), "utf8"));
+
+  /* Identifiers used as `name(` or `name.` or bare, excluding property access
+   * and declarations, are checked against what earlier files defined plus what
+   * this file declares itself. */
+  const declared = new Set();
+  for (const m of src.matchAll(/(?:^|\s)(?:function\s+|var\s+)([A-Za-z_$][\w$]*)/g)) {
+    declared.add(m[1]);
+  }
+  /* var a = 1, b = 2; */
+  for (const m of src.matchAll(/var\s+([^;=]+)=/g)) {
+    for (const part of m[1].split(",")) { declared.add(part.trim()); }
+  }
+  /* function parameters and catch bindings */
+  for (const m of src.matchAll(/function\s*[\w$]*\s*\(([^)]*)\)/g)) {
+    for (const p of m[1].split(",")) { if (p.trim()) { declared.add(p.trim()); } }
+  }
+  for (const m of src.matchAll(/catch\s*\(\s*([\w$]+)\s*\)/g)) { declared.add(m[1]); }
+  for (const m of src.matchAll(/for\s*\(\s*var\s+([\w$]+)/g)) { declared.add(m[1]); }
+
+  const calls = new Set();
+  for (const m of src.matchAll(/(?<![.\w$"'])([A-Za-z_$][\w$]*)\s*\(/g)) {
+    calls.add(m[1]);
+  }
+
+  const keywords = new Set(["if", "for", "while", "switch", "catch", "return",
+    "function", "typeof", "new", "delete", "void", "in", "instanceof", "do",
+    "else", "throw", "case"]);
+
+  const missing = [...calls].filter((n) =>
+    !keywords.has(n) && !declared.has(n) && !known.has(n) && !HOST.includes(n));
+
+  if (missing.length) {
+    console.log(`✗ ${file}: calls undefined ${missing.join(", ")}`);
+    failed = true;
+  } else {
+    console.log(`✓ ${file}`);
+  }
+
+  for (const d of declared) { known.add(d); }
+}
+
+const known = new Set();
+for (const f of ORDER) { scanFile(f, known); }
+
+/* Every id the app reaches for must exist in the markup or be built by it. */
+const html = fs.readFileSync(new URL("../app/index.html", import.meta.url).pathname, "utf8");
+const htmlIds = new Set([...html.matchAll(/id="([\w-]+)"/g)].map((m) => m[1]));
+const jsIds = new Set();
+for (const f of ORDER) {
+  const src = fs.readFileSync(path.join(APP, f), "utf8");
+  for (const m of src.matchAll(/(?:\$|getElementById)\("([\w-]+)"\)/g)) { jsIds.add(m[1]); }
+  /* ids created from template strings count as present */
+  for (const m of src.matchAll(/id="([\w-]+)"/g)) { htmlIds.add(m[1]); }
+}
+const missingIds = [...jsIds].filter((id) => !htmlIds.has(id));
+if (missingIds.length) {
+  console.log(`✗ index.html: missing ids ${missingIds.join(", ")}`);
+  failed = true;
+} else {
+  console.log("✓ element ids");
+}
+
+process.exit(failed ? 1 : 0);

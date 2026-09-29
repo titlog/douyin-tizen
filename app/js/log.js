@@ -41,6 +41,13 @@ var Log = (function () {
         report("csp", "拦了 " + e.violatedDirective + " ← " + String(e.blockedURI || "").slice(0, 40) + " | 生效的策略：" + String(e.originalPolicy || "").slice(0, 200));
     });
 
+    /* Promise 回调里抛的异常到不了 onerror。2026-09-29 render() 被误删，异常就是在推荐流的 then
+     * 里抛出、没人接 —— 第一条视频永远不出画面，日志里一个字都没有。 */
+    window.addEventListener("unhandledrejection", function (e) {
+        var r = e.reason;
+        report("onerror", "未处理的 Promise 异常：" + (r && r.message ? r.message : String(r)) + (r && r.stack ? " | " + String(r.stack).split("\n").slice(1, 3).join(" ").replace(/\s+/g, " ").slice(0, 160) : ""));
+    });
+
     window.onerror = function (m, src, line) {
         report("onerror", m + " @" + String(src || "").split("/").pop() + ":" + line);
     };

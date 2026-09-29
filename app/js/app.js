@@ -1,6 +1,6 @@
 /* 界面与遥控器。
  *
- * 顶部四个标签：精选 · 推荐 · 关注 · 我（像抖音 App 横滑切标签）。前三个是视频流，每个标签
+ * 顶部四个标签：精选 · 关注 · 推荐 · 我（默认进推荐）（像抖音 App 横滑切标签）。前三个是视频流，每个标签
  * 各记各的位置，切回来接着看；「我」是登录 / 账号页。未登录时「关注」也显示扫码登录。
  *
  * 遥控器：
@@ -22,11 +22,11 @@
 
     var TABS = [
         {key: "jingxuan", name: "精选", feed: true},
-        {key: "recommend", name: "推荐", feed: true},
         {key: "follow", name: "关注", feed: true, needLogin: true},
+        {key: "recommend", name: "推荐", feed: true},
         {key: "me", name: "我", feed: false}
     ];
-    var START_TAB = 1;
+    var START_TAB = 2;         // 默认进「推荐」
 
     var $ = function (id) { return document.getElementById(id); };
     var tab = -1;
@@ -40,7 +40,10 @@
     var backAt = 0;
     var logoutAt = 0;
     var loginFor = "";        // 登录是从哪个标签发起的，成功后回到那里
-    var paintToken = 0;
+    var switchInfo = null;    // 这一次切换：封面图什么时候到、比例多少（「封面」那行日志用）
+    /* 预热方式。"blob"（整段下进内存）在 2026-09-29 的对照里只快一两百毫秒、而且多数视频
+     * 32–216MB 太大用不上，见 CLAUDE.md；代码留着，默认用 "range"。 */
+    var PRELOAD_MODE = "range";
     var bootAt = Date.now();
     var bootMarks = {};
     var bootTold = false;
@@ -62,10 +65,11 @@
         toast.timer = setTimeout(function () { t.className = ""; }, ms || 2000);
     }
 
-    /* 信息层（作者、标题、进度）和标签栏一起出现、一起淡出；非视频页上标签栏常驻。 */
-    function showInfo() {
+    /* 信息层（作者、标题、进度）每次换视频都出来；标签栏只在切标签、暂停时出来 —— 上下刷的
+     * 时候顶部冒出导航是打扰（2026-09-29 用户反馈）。暂停期间和非视频页上标签栏常驻。 */
+    function showInfo(withTabs) {
         $("info").className = view === "feed" ? "show" : "";
-        $("tabs").className = "show";
+        $("tabs").className = withTabs || view !== "feed" || Player.isPaused() ? "show" : "";
         clearTimeout(infoTimer);
         infoTimer = setTimeout(function () {
             if (view === "feed" && !Player.isPaused()) { $("info").className = ""; $("tabs").className = ""; }
@@ -87,6 +91,7 @@
         $("empty").className = v === "empty" ? "show" : "";
         if (v !== "feed") {
             $("cover").className = "";
+            $("mask").className = "";
             $("info").className = "";
             $("loading").className = "";
             $("paused").className = "";
@@ -104,49 +109,67 @@
         return m + ":" + (s % 60 < 10 ? "0" : "") + (s % 60);
     }
 
-    /* 竖屏视频两侧的那层：封面画进 48×27 的 canvas，CSS 拉伸到全屏 —— 缩小就是模糊。
-     *
-     * **切换时画面上不许有 CSS 滤镜。** 2026-09-29 在设备上同一轮里轮换几种做法比较（排除
-     * 网络波动），每种 5–6 个样本，按下到出画面的中位数：
-     *   背景 CSS blur(40px)  2575ms    小画布 1256ms    没有背景 1233ms
-     *   再盖一层 blur 封面   3673ms    （不模糊的封面层只多 ~100ms）
-     * 模糊滤镜每换一次图就要在这块 GPU 上重新光栅化一张 2000 像素的图，和解码器抢时间。
-     * 只画不读，跨域图片把 canvas 弄脏也无所谓。 */
-    function paintBackground(url) {
-        var bgCanvas = $("bgc");
-        var ctx = bgCanvas.getContext("2d");
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
-        var token = ++paintToken;
-        if (!url) { return; }
-        var img = new Image();
-        img.onload = function () {
-            if (token !== paintToken) { return; }        // 图到的时候观众已经切走了
-            /* cover 式裁切：短边铺满。 */
-            var cw = bgCanvas.width, ch = bgCanvas.height;
-            var sc = Math.max(cw / img.width, ch / img.height);
-            var w = img.width * sc, h = img.height * sc;
-            ctx.drawImage(img, (cw - w) / 2, (ch - h) / 2, w, h);
-        };
-        img.src = url;
+    /* 视频将要占的那块区域：用接口给的视频宽高算，不用封面图的 —— 封面比例常常和视频不一样，
+     * 按封面摆放的话，视频一出画面区域就跳一下（2026-09-29 用户反馈「切视频闪一下」）。 */
+    function fitBox(w, h) {
+        if (!w || !h) { return {l: 0, t: 0, w: 1920, h: 1080}; }
+        var sc = Math.min(1920 / w, 1080 / h);
+        var W = Math.round(w * sc), H = Math.round(h * sc);
+        return {l: Math.round((1920 - W) / 2), t: Math.round((1080 - H) / 2), w: W, h: H};
     }
 
-    function render(item) {
+    /* 切换那一刻：
+     *   - 黑幕提到视频上面，挡住上一条残留的最后一帧（上一版把 <video> 设成 visibility:hidden
+     *     再亮起来，那一藏一亮本身可疑，不再碰它）；
+     *   - 封面按视频的区域摆放（cover 裁切），图到了才显示 —— 黑底封面层在图没到的那几百毫秒
+     *     就是一块黑屏；
+     *   - 竖屏视频两侧是纯黑（用户要求：封面拉伸出来的模糊彩色背景抢注意力）。
+     * **切换时画面上不许有 CSS 滤镜**：一层 blur(40px) 实测让每次切换多一秒多（见 CLAUDE.md）。
+     * 「封面」那行日志报图用了多久、封面比例和视频比例。 */
+    function render(item, dir) {
         $("author").textContent = item.author ? "@" + item.author : "";
         $("desc").textContent = item.desc;
         $("stats").textContent = "♥ " + count(item.likes) + "   💬 " + count(item.comments);
-        paintBackground(item.cover);
-        /* 解码器只有一个，出画面要 ~1.2 秒；屏幕必须在按键那一刻就变 —— 先盖上这一条的
-         * 封面（不带模糊，见 paintBackground），出画面再撤。 */
-        $("cover").lastChild.style.backgroundImage = item.cover ? "url(\"" + item.cover + "\")" : "none";
+        var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false};
+        $("mask").className = "over";
+        var box = fitBox(item.w, item.h);
+        var im = $("cover").lastChild;
+        im.style.left = box.l + "px"; im.style.top = box.t + "px";
+        im.style.width = box.w + "px"; im.style.height = box.h + "px";
+        im.style.backgroundImage = "none";
         $("cover").className = "show";
+        slideIn(im, dir);
+        if (item.cover) {
+            var img = new Image();
+            img.onload = function () {
+                if (switchInfo !== sw) { return; }         // 图到的时候观众已经切走了
+                sw.coverMs = Date.now() - sw.at;
+                sw.ar = img.width / img.height;
+                if (!sw.playing) { im.style.backgroundImage = "url(\"" + item.cover + "\")"; }
+            };
+            img.src = item.cover;
+        }
         $("bar").style.width = "0";
         $("paused").className = "";
+        $("progress").className = "";
         showInfo();
     }
 
-    function show(item, startAt) {
-        render(item);
+    /* 上滑动画：新封面从屏幕外滑进来（下一条从底部，上一条从顶部），0.25 秒。它不让视频更快出来，
+     * 而是把解码器冷启动的那段等待藏在动画里 —— 按键那一刻屏幕就在动。只用 transform（合成层
+     * 上做，不重新光栅化）；**不许加滤镜**，见 render 的注释。旧画面不跟着滑走：那得把新视频的
+     * 加载推迟 0.25 秒，反而更慢。 */
+    function slideIn(el, dir) {
+        el.style.transition = "none";
+        el.style.transform = dir === "up" ? "translateY(1080px)" : dir === "down" ? "translateY(-1080px)" : "none";
+        if (!dir) { return; }
+        void el.offsetHeight;                       // 先把起点提交，过渡才有起点
+        el.style.transition = "transform 250ms cubic-bezier(0.2, 0.8, 0.2, 1)";
+        el.style.transform = "translateY(0)";
+    }
+
+    function show(item, startAt, dir) {
+        render(item, dir);
         clearTimeout(preloadTimer);
         Player.play(item, TABS[tab].name, startAt);
     }
@@ -155,13 +178,18 @@
      * 这一条抢这台机器不快的链路。 */
     function schedulePreload() {
         clearTimeout(preloadTimer);
-        preloadTimer = setTimeout(function () {
+        /* 接下来两条都预热（只是 XHR，不碰解码器）：连着快速下划时第二条也是热的。第二条晚
+         * 2 秒再发，别和第一条、也别和正在起播的这一条抢链路。 */
+        var warmOne = function (n) {
             if (view !== "feed" || !feed()) { return; }
-            var nx = feed().peekNext();
-            if (nx) {
-                Player.preload(nx);
-                if (nx.cover) { (new Image()).src = nx.cover; }
-            }
+            var nx = feed().peek(n);
+            if (!nx) { return; }
+            Player.preload(nx, PRELOAD_MODE);
+            if (nx.cover) { (new Image()).src = nx.cover; }
+        };
+        preloadTimer = setTimeout(function () {
+            warmOne(1);
+            preloadTimer = setTimeout(function () { warmOne(2); }, 2000);
         }, 1500);
     }
 
@@ -177,7 +205,7 @@
             $("loading").className = "";
             Log.report("播放", f.name + " #" + f.position() + " " + cause + " " + item.id + " " + (item.author || "") + " " +
                        item.desc.slice(0, 20) + " " + item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s");
-            show(item);
+            show(item, 0, cause === "下键" || cause === "播完" ? "up" : "");
         }, function (e) {
             busy = false;
             if (tab !== myTab || view !== "feed") { return; }
@@ -197,7 +225,7 @@
         var item = feed().prev();
         if (!item) { toast("已经是第一条了"); return; }
         Log.report("播放", feed().name + " #" + feed().position() + " 上一条 " + item.id);
-        show(item);
+        show(item, 0, "down");
     }
 
     // ---------- 登录 / 账号 ----------
@@ -281,23 +309,23 @@
             $("loading").className = "show";
             var waitTab = tab;
             bootReady.then(function () { if (tab === waitTab) { enterTab(waitTab, "登录态已知"); } });
-            showInfo();
+            showInfo(true);
             return;
         }
         if (!T.feed) {
             if (Account.loggedIn()) { showMe(); } else { showLogin("用抖音 App 扫码登录"); }
-            showInfo();
+            showInfo(true);
             return;
         }
         if (T.needLogin && !Account.loggedIn()) {
             showLogin("登录后看你关注的人");
-            showInfo();
+            showInfo(true);
             return;
         }
         setView("feed");
         var cur = feed().current();
         if (cur) { show(cur, resumeAt[T.key] || 0); } else { Player.stop(); next("进入标签"); }
-        showInfo();
+        showInfo(cause !== "启动");
     }
 
     function moveTab(d) {
@@ -332,8 +360,21 @@
             Log.report("boot", "第一帧 " + (Date.now() - bootAt) + "ms（签名桥 " + (bootMarks.bridge || "还没好") +
                        " 登录态 " + (bootMarks.account || "还没好") + "）" + (f && f.fromCache() ? " 先放的是缓存（" + f.fromCache() + " 条）" : " 没有缓存，等了推荐接口"));
         }
-        $("cover").className = "";
         schedulePreload();
+    });
+    /* 播放头真的走起来了才撤封面、放下黑幕（见 player.js）。 */
+    Player.on("firstframe", function (how, lateMs) {
+        $("cover").className = "";
+        $("mask").className = "";
+        var sw = switchInfo;
+        if (sw && !sw.playing) {
+            sw.playing = true;
+            var ps = Player.state();
+            var ar = function (x) { return x ? x.toFixed(2) : "?"; };
+            Log.report("封面", (sw.coverMs < 0 ? "出画面时图还没到" : "图 " + sw.coverMs + "ms 到") + "（" + (sw.item.coverKind || "缓存条目") + "），比例 封面 " + ar(sw.ar) +
+                       " / 接口给的视频 " + ar(sw.item.h ? sw.item.w / sw.item.h : 0) + " / 实际解码 " + ar(ps.vh ? ps.vw / ps.vh : 0) +
+                       " | 撤封面：" + how + "，比 playing 晚 " + lateMs + "ms");
+        }
     });
     Player.on("ended", function () { next("播完"); });
     Player.on("progress", function (t, d) {
@@ -387,13 +428,14 @@
         case KEY.ENTER: case KEY.PLAY_PAUSE: case KEY.PLAY: case KEY.PAUSE:
             var p = Player.toggle();
             $("paused").className = p ? "show" : "";
-            showInfo();
+            $("progress").className = p ? "show" : "";
+            showInfo(p);
             break;
         case KEY.LEFT:
-            if (Player.isPaused()) { Player.seek(-10); showInfo(); } else { moveTab(-1); }
+            if (Player.isPaused()) { Player.seek(-10); showInfo(true); } else { moveTab(-1); }
             break;
         case KEY.RIGHT:
-            if (Player.isPaused()) { Player.seek(10); showInfo(); } else { moveTab(1); }
+            if (Player.isPaused()) { Player.seek(10); showInfo(true); } else { moveTab(1); }
             break;
         case KEY.REW:
             Player.seek(-10); showInfo(); break;

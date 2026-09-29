@@ -14,6 +14,7 @@ var Player = (function () {
     "use strict";
 
     var WARM_BYTES = 524288;
+    var BLOB_MAX = 30 * 1048576;
     var el = null;
     var gen = 0;
     var handlers = {};
@@ -53,6 +54,20 @@ var Player = (function () {
                        " 可播 " + (marks.canplay || "?") + "）" + (playNote ? playNote + " " : "") + "预热=" + usedWarm + (fellBack ? "（最终地址失败，退回跳转接口）" : "") +
                        " " + el.videoWidth + "x" + el.videoHeight + " | " + (item.author || "") + " " + item.desc.slice(0, 16));
             if (handlers.playing) { handlers.playing(item); }
+            /* playing 不等于画面已经上屏：撤封面要等解码器真的在出帧。**requestVideoFrameCallback
+             * 在这台电视上从不回调**（2026-09-29 设备实测：21 次全是 1 秒兜底 —— 视频走硬件视频层，
+             * 不经过网页的合成器）。能用的信号是播放头真的往前走了：playing 时的 currentTime 之后
+             * 再前进 0.1 秒。兜底 0.8 秒。晚了多少报进「封面」那行。 */
+            var g = gen, tp = Date.now(), t0 = el.currentTime, done = false;
+            var fire = function (how) {
+                if (done || g !== gen) { return; }
+                done = true;
+                el.removeEventListener("timeupdate", onTick);
+                if (handlers.firstframe) { handlers.firstframe(how, Date.now() - tp); }
+            };
+            var onTick = function () { if (el.currentTime > t0 + 0.1) { fire("播放头走了"); } };
+            el.addEventListener("timeupdate", onTick);
+            setTimeout(function () { fire("播放头 0.8 秒没走，兜底"); }, 800);
         });
         el.addEventListener("ended", function () { if (item && handlers.ended) { handlers.ended(); } });
         el.addEventListener("error", function () {
@@ -104,36 +119,67 @@ var Player = (function () {
             paused = false;
             lastTime = -1;
             stuckSince = Date.now();
+            /* 整段下载的只留这一条：其余的 blob 立刻放掉（每条几 MB 到几十 MB）。回头看上一条时
+             * 它会走普通地址。 */
+            for (var id in warm) {
+                if (warm.hasOwnProperty(id) && id !== it.id && warm[id].blob) {
+                    try { URL.revokeObjectURL(warm[id].url); } catch (e) {}
+                    delete warm[id];
+                }
+            }
             var w = warm[it.id];
             if (w && w.state === "好了") {
-                usedWarm = "好了（" + Math.round((switchAt - w.at) / 1000) + " 秒前备好，用时 " + w.ms + "ms）";
+                usedWarm = (w.mode === "blob" ? "整段" : "开头") + "·好了（" + (w.bytes / 1048576).toFixed(1) + "MB，" +
+                           Math.round((switchAt - w.at) / 1000) + " 秒前备好，用时 " + w.ms + "ms）";
                 start(w.url);
             } else {
-                usedWarm = w ? w.state : "无";
+                usedWarm = w ? (w.mode === "blob" ? "整段" : "开头") + "·" + w.state : "无";
                 start(it.url);
             }
         },
 
-        /* 预热下一条：走 302 拿最终地址 + 取开头 WARM_BYTES。不创建任何媒体元素。 */
-        preload: function (it) {
+        /* 预热下一条。不创建任何媒体元素（第二个媒体元素会抢走唯一的解码器，见文件顶部）。
+         *   "range"：走 302 拿最终地址 + 取开头 WARM_BYTES —— 焐热 CDN 边缘、省掉起播那一跳。
+         *   "blob" ：整段下进内存，起播直接放 blob: 地址，一个字节都不走网络。超过 BLOB_MAX 放弃，
+         *            退回 range 的效果（起播用跳转接口）。
+         * 两种哪个更快是 2026-09-29 的实验，自测构建里轮换比较，见 app.js 的 schedulePreload。 */
+        preload: function (it, mode) {
             if (!it || warm[it.id]) { return; }
-            var w = warm[it.id] = {state: "在途", at: 0};
+            mode = mode || "range";
+            var w = warm[it.id] = {state: "在途", at: 0, mode: mode};
             var t0 = Date.now();
             var x = new XMLHttpRequest();
             x.open("GET", it.url);
-            x.responseType = "arraybuffer";
-            x.setRequestHeader("Range", "bytes=0-" + (WARM_BYTES - 1));
-            x.timeout = 15000;
+            x.timeout = mode === "blob" ? 60000 : 15000;
+            if (mode === "blob") {
+                x.responseType = "blob";
+                x.onprogress = function (e) {
+                    if (e.lengthComputable && e.total > BLOB_MAX) {
+                        w.state = "太大（" + (e.total / 1048576).toFixed(0) + "MB）";
+                        x.abort();
+                    }
+                };
+            } else {
+                x.responseType = "arraybuffer";
+                x.setRequestHeader("Range", "bytes=0-" + (WARM_BYTES - 1));
+            }
             x.onload = function () {
                 if ((x.status === 206 || x.status === 200) && x.responseURL && x.responseURL.indexOf("/aweme/v1/play/") < 0) {
-                    w.state = "好了"; w.url = x.responseURL; w.ms = Date.now() - t0; w.at = Date.now();
-                    w.bytes = x.response ? x.response.byteLength : 0;
+                    w.state = "好了"; w.ms = Date.now() - t0; w.at = Date.now();
+                    if (mode === "blob") {
+                        w.bytes = x.response.size;
+                        w.url = URL.createObjectURL(x.response);
+                        w.blob = true;
+                    } else {
+                        w.bytes = x.response ? x.response.byteLength : 0;
+                        w.url = x.responseURL;
+                    }
                 } else {
                     w.state = "失败（HTTP " + x.status + "）";
                     Log.report("预热", "失败 HTTP " + x.status + " | " + it.desc.slice(0, 16));
                 }
             };
-            x.onerror = x.ontimeout = function () { w.state = "失败（连接）"; };
+            x.onerror = x.ontimeout = function () { if (w.state === "在途") { w.state = "失败（连接）"; } };
             x.send();
         },
 
@@ -156,7 +202,9 @@ var Player = (function () {
         isPaused: function () { return paused; },
         /* 给自测读的快照，不改任何状态。 */
         state: function () {
-            return { id: item ? item.id : "", t: el.currentTime, dur: el.duration || 0, readyState: el.readyState,
+            return { id: item ? item.id : "", t: el.currentTime, vw: el.videoWidth, vh: el.videoHeight,
+                     net: el.networkState, err: el.error ? el.error.code : 0, src: String(el.currentSrc || el.src || "").slice(0, 40),
+                     elPaused: el.paused, buffered: el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0, dur: el.duration || 0, readyState: el.readyState,
                      paused: el.paused, shown: told, sinceSwitch: Date.now() - switchAt };
         }
     };

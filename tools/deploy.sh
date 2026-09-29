@@ -38,6 +38,9 @@ HOST_IP=$(ipconfig getifaddr "$NET_IF")
 
 echo "== checking =="
 for f in "$APP"/js/*.js; do node --check "$f" >/dev/null || { echo "  syntax error in $f"; exit 1; }; done
+# node --check 只证明能解析。调用一个被删掉的函数照样放行 —— 2026-09-29 一次按锚点删块
+# 带走了 render()，装上去第一条视频永远不出画面、没有任何报错。lint 抓「调用了不存在的东西」。
+if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/lint.mjs" >/dev/null || { node "$ROOT/tools/lint.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
 
 echo "== report -> http://$HOST_IP:$PORT =="
 sed -i '' -E "s#^var REPORT_TO = \"[^\"]*\";#var REPORT_TO = \"http://$HOST_IP:$PORT\";#" "$APP/js/config.js"

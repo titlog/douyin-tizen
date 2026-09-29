@@ -86,12 +86,16 @@
         return poll();
     }
 
+    function tabsShown() { return document.getElementById("tabs").className === "show"; }
+
     function switchStep(label, code) {
         var before = st().id;
         key(code);
+        /* 上下刷时顶部导航不出来（用户要求：只在暂停和左右键时出来）。 */
+        var tabsAfterKey = tabsShown();
         return waitShown(before, 15000).then(function (ms) {
             return longestStall(6000).then(function (stall) {
-                check(label, ms >= 0 && stall < 3000, "出画面 " + ms + "ms，之后 6 秒里最长停顿 " + stall + "ms");
+                check(label, ms >= 0 && stall < 3000 && !tabsAfterKey, "出画面 " + ms + "ms，之后 6 秒里最长停顿 " + stall + "ms，导航" + (tabsAfterKey ? "出来了（不该）" : "没出来"));
             });
         });
     }
@@ -101,7 +105,11 @@
         return waitShown("", 40000).then(function (ms) {
             check("启动出画面", ms >= 0, "从自测开始等了 " + ms + "ms");
             /* 起都没起来，后面每一步都只会重复同一个失败 —— 停下，别拿它刷日志。 */
-            if (ms < 0) { throw new Error("启动就没出画面，后面的步骤不跑了"); }
+            if (ms < 0) {
+                var z = st();
+                throw new Error("启动就没出画面，后面的步骤不跑了。播放器：" + JSON.stringify(z) + " 视图=" + window.__app.view() +
+                                " 遮罩=" + document.getElementById("mask").className + " 封面=" + document.getElementById("cover").className);
+            }
             return ensureLong();
         }).then(function () { return advance(20000); }).then(function (adv) {
             check("长视频连续播 20 秒", adv > 17, "前进 " + adv.toFixed(1) + "s（旧版两个 <video> 时这里是 ~2s 后冻住）");
@@ -112,8 +120,9 @@
           .then(ensureLong)
           .then(function () {
             key(KEY.ENTER);
+            var tabsOnPause = tabsShown();
             return wait(1000).then(function () { return advance(3000); }).then(function (adv) {
-                check("暂停后不走", Math.abs(adv) < 0.3 && st().paused, "3 秒前进 " + adv.toFixed(2) + "s");
+                check("暂停后不走、导航出来", Math.abs(adv) < 0.3 && st().paused && tabsOnPause, "3 秒前进 " + adv.toFixed(2) + "s，导航" + (tabsOnPause ? "出来了" : "没出来（该出来）"));
                 key(KEY.ENTER);
                 return wait(1000).then(function () { return advance(3000); });
             }).then(function (adv) {
@@ -166,24 +175,39 @@
                 check("连刷十条", bad === 0, "出画面中位数 " + med + "ms，最慢 " + (slow[slow.length - 1] || -1) + "ms，失败 " + bad + " | 全部=" + slow.join(","));
             });
         }).then(function () {
-            /* 标签：未登录时「关注」和「我」都该出二维码；精选能播能刷；切回推荐接着那一条。 */
+            /* 标签顺序：精选 · 关注 · 推荐 · 我。预期跟着登录态走：已登录时「关注」能播、「我」是
+             * 账号页；未登录时两个都出二维码。**「我」页上绝不按确认键** —— 那是退出登录。 */
             var recId = st().id, recT = st().t;
+            var logged = Account.loggedIn();
             key(KEY.RIGHT);
-            return waitQr(20000).then(function (ms) {
-                check("未登录时「关注」出二维码", window.__app.tab() === "follow" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
-                key(KEY.RIGHT);
-                return waitQr(20000);
+            return (logged ? wait(1500).then(function () { return 0; }) : waitQr(20000)).then(function (ms) {
+                if (logged) {
+                    check("已登录时「我」是账号页", window.__app.tab() === "me" && window.__app.view() === "me", "视图=" + window.__app.view());
+                } else {
+                    check("未登录时「我」出二维码", window.__app.tab() === "me" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
+                }
+                key(KEY.LEFT);                       // 回推荐
+                return waitShown("", 15000).then(function () { return wait(1500); });
+            }).then(function () {
+                key(KEY.LEFT);                       // 到关注
+                return logged ? waitShown(recId, 20000) : waitQr(20000);
             }).then(function (ms) {
-                check("「我」出二维码", window.__app.tab() === "me" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
-                key(KEY.LEFT); key(KEY.LEFT); key(KEY.LEFT);
-                return waitShown(recId, 20000);
+                if (logged) {
+                    return longestStall(6000).then(function (stall) {
+                        check("已登录时「关注」能播", window.__app.tab() === "follow" && ms >= 0 && stall < 3000, "出画面 " + ms + "ms，最长停顿 " + stall + "ms");
+                    });
+                }
+                check("未登录时「关注」出二维码", window.__app.tab() === "follow" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
+            }).then(function () {
+                key(KEY.LEFT);                       // 到精选
+                return waitShown(st().id, 20000);
             }).then(function (ms) {
                 return longestStall(6000).then(function (stall) {
                     check("「精选」能播", window.__app.tab() === "jingxuan" && ms >= 0 && stall < 3000, "出画面 " + ms + "ms，最长停顿 " + stall + "ms");
                 });
             }).then(function () { return switchStep("精选里下一条", KEY.DOWN); })
               .then(function () {
-                key(KEY.RIGHT);
+                key(KEY.RIGHT); key(KEY.RIGHT);      // 经过关注回到推荐
                 return waitShown("", 15000);
             }).then(function () {
                 return wait(2500).then(function () {
@@ -247,7 +271,7 @@
     /* --qr：启动后直接去「我」，只看二维码有没有真的显示出来。30 秒出结果。 */
     function qrOnly() {
         return waitShown("", 40000).then(function () {
-            key(KEY.RIGHT); key(KEY.RIGHT);
+            key(KEY.RIGHT);                          // 推荐右边就是「我」
             return waitQr(30000);
         }).then(function (ms) {
             var q = document.getElementById("qr");

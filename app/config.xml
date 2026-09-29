@@ -19,11 +19,11 @@
     <!-- 默认策略是 default-src *; script-src 'self'; style-src 'self'; object-src 'none'（设备上
          securitypolicyviolation 报出来的原文）。图片落在 default-src *，而 * 不含 data: ——
          登录页的二维码是一张 data:image/png，搬到我们界面上就成了破图标（2026-09-29）。
-         其余照抄默认，只给图片加 data:。 -->
-    <tizen:content-security-policy>default-src *; script-src 'self'; style-src 'self'; object-src 'none'; img-src * data:</tizen:content-security-policy>
+         其余照抄默认，只给图片加 data:。视频同理：整段预下载的视频放的是 blob: 地址，* 也不含它。 -->
+    <tizen:content-security-policy>default-src *; script-src 'self'; style-src 'self'; object-src 'none'; img-src * data:; media-src * blob:</tizen:content-security-policy>
     <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"/>
     <icon src="icon.png"/>
-    <name>douyin</name>
+    <name>抖音</name>
     <description>Douyin for Samsung TV</description>
 
     <tizen:privilege name="http://tizen.org/privilege/internet"/>

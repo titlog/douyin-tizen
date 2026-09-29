@@ -11,6 +11,7 @@ var Feed = (function () {
     "use strict";
 
     var LOOKAHEAD = 4;
+    var coverTold = false;
     /* 冷启动的一大半是在等签名桥和第一批推荐（~5 秒）。播放地址不签名，所以把「已取到、
      * 还没看」的条目存下来，下次打开先放它们，签名桥在后台起。存 12 小时 —— 推荐是
      * 几小时前的也无妨，而跳转接口对任何 video_id 都不过期。关注流不存（跟登录的人有关），
@@ -47,12 +48,27 @@ var Feed = (function () {
         if (!v || !v.play_addr || !v.play_addr.uri) { why.push("无地址"); return null; }
         var au = a.author || {};
         var st = a.statistics || {};
+        /* 封面挑比例和视频最接近的那张：cover 几乎全是 4:3（设备实测 20 次里 19 次），从它裁出来
+         * 的图和视频首帧对不上，交接那一下像画面抖了。origin_cover 常常是原比例。 */
+        var covers = [["cover", v.cover], ["origin_cover", v.origin_cover], ["dynamic_cover", v.dynamic_cover]];
+        var want = v.width && v.height ? v.width / v.height : 0;
+        var best = null, bestDiff = 9, dims = [];
+        for (var c = 0; c < covers.length; c++) {
+            var cv = covers[c][1];
+            if (!cv || !first(cv)) { continue; }
+            var ar = cv.width && cv.height ? cv.width / cv.height : 0;
+            dims.push(covers[c][0] + "=" + (cv.width || "?") + "x" + (cv.height || "?"));
+            var diff = want && ar ? Math.abs(Math.log(ar / want)) : 5;
+            if (diff < bestDiff) { bestDiff = diff; best = covers[c]; }
+        }
+        if (!coverTold) { coverTold = true; Log.report("feed", "封面字段 " + dims.join(" ") + " | 视频 " + v.width + "x" + v.height + " → 用 " + (best ? best[0] : "无")); }
         return {
             id: a.aweme_id,
             desc: a.desc || "",
             author: au.nickname || "",
             avatar: first(au.avatar_thumb),
-            cover: first(v.cover) || first(v.origin_cover),
+            cover: best ? first(best[1]) : "",
+            coverKind: best ? best[0] : "",
             uri: v.play_addr.uri,
             url: playUrl(v.play_addr.uri),
             w: v.width || 0,
@@ -188,6 +204,7 @@ var Feed = (function () {
                 return items[pos];
             },
             peekNext: function () { return items[pos + 1] || null; },
+            peek: function (n) { return items[pos + n] || null; },
             current: function () { return items[pos] || null; },
             position: function () { return pos; },
             isEmpty: function () { return items.length === 0; },
