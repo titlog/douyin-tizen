@@ -1,4 +1,11 @@
-/* 一个 <video>，外加一个不碰解码器的预热。
+/* 一个 <video>，两种放法（2026-09-30 起）：
+ *   "mse"：默认。整个会话一个 MediaSource，每条视频一个时间槽，切换 = seek（js/mse.js）。换 src 要
+ *          ~1.2 秒拆建解码管线，seek 到预先 append 好的槽 ~0.25 秒（CLAUDE.md）。
+ *   "src"：给元素换 src。MSE 放不了的条目（非 H.264、没有音轨、moov 不在开头……）走它；MSE 管线在
+ *          一次会话里坏了 3 次，整场改走它。两种之间切换要拆掉 MediaSource，下一条 MSE 冷启动。
+ * app.js 看到的接口两种一样；时间、时长都换算成这一条自己的（MSE 的 currentTime 带着槽的偏移）。
+ *
+ * 以下是 src 放法的来历。
  *
  * 第一版是两个 <video> 轮换（当前 + 预载下一条），2026-09-29 设备上第一晚就证伪了：
  * 这台电视只有一个硬件解码器，备用元素一 load() 解出首帧（readyState=4），正在放的那条
@@ -22,6 +29,11 @@ var Player = (function () {
     var WARM_AFTER_MOOV = 524288;
     var BLOB_MAX = 30 * 1048576;
     var moovAB = false;                  // 自测 --ab：补取 / 不补取按视频 id 奇偶分，同轮对照
+    var USE_MSE = true;
+    var engine = "";           // "mse" | "src" | ""（停着）
+    var mseE = null;           // MSE：正在放的那条（Mse 的条目：base、dur、vw、vh、slot）
+    var pendingPlace = null;   // MSE：seeked 那一刻再按新尺寸摆框 —— 早了会把上一条的最后一帧拉变形
+    var mseFails = 0, mseOff = "";
     var el = null;
     var gen = 0;
     var handlers = {};
@@ -52,6 +64,22 @@ var Player = (function () {
     }
     function mb(n) { return (n / 1048576).toFixed(1) + "MB"; }
 
+    /* MSE 下 videoWidth/Height 永远停在第一条（设备实测），元素按它 contain 摆放，换了比例的视频就变形。
+     * 框直接摆成这一条该占的区域、object-fit: fill；src 下还原成 CSS 里的全屏 contain。 */
+    function place(e) {
+        var s = el.style;
+        if (!e || !e.vw || !e.vh) { s.left = s.top = s.width = s.height = s.objectFit = ""; return; }
+        var sc = Math.min(1920 / e.vw, 1080 / e.vh), W = Math.round(e.vw * sc), H = Math.round(e.vh * sc);
+        s.left = Math.round((1920 - W) / 2) + "px";
+        s.top = Math.round((1080 - H) / 2) + "px";
+        s.width = W + "px";
+        s.height = H + "px";
+        s.objectFit = "fill";
+    }
+    function rel() { return engine === "mse" && mseE ? Math.max(0, el.currentTime - mseE.base) : el.currentTime; }
+    function relDur() { return engine === "mse" && mseE ? mseE.dur : (el.duration || 0); }
+    function useMse(it) { return USE_MSE && !mseOff && Mse.usable(it); }
+
     function start(url) {
         el.src = url;
         el.preload = "auto";
@@ -64,37 +92,57 @@ var Player = (function () {
 
     function wire() {
         el.addEventListener("loadedmetadata", function () {
+            if (engine !== "src") { return; }
             if (pendingSeek && el.duration && pendingSeek < el.duration - 3) { el.currentTime = pendingSeek; }
             pendingSeek = 0;
         });
-        ["loadedmetadata", "loadeddata", "canplay"].forEach(function (name) {
+        ["loadedmetadata", "loadeddata", "canplay", "seeked"].forEach(function (name) {
             el.addEventListener(name, function () { if (!told && !marks[name]) { marks[name] = Date.now() - switchAt; } });
         });
-        el.addEventListener("playing", function () {
-            if (told) { return; }
-            told = true;
-            Log.report("到画面", (Date.now() - switchAt) + "ms（元数据 " + (marks.loadedmetadata || "?") + " 首帧数据 " + (marks.loadeddata || "?") +
-                       " 可播 " + (marks.canplay || "?") + "）" + (playNote ? playNote + " " : "") + "预热=" + usedWarm + (fellBack ? "（最终地址失败，退回跳转接口）" : "") +
-                       " " + el.videoWidth + "x" + el.videoHeight + " | " + (item.author || "") + " " + item.desc.slice(0, 16));
-            if (handlers.playing) { handlers.playing(item); }
-            /* playing 不等于画面已经上屏：撤封面要等解码器真的在出帧。**requestVideoFrameCallback
-             * 在这台电视上从不回调**（2026-09-29 设备实测：21 次全是 1 秒兜底 —— 视频走硬件视频层，
-             * 不经过网页的合成器）。能用的信号是播放头真的往前走了：playing 时的 currentTime 之后
-             * 再前进 0.1 秒。兜底 0.8 秒。晚了多少报进「封面」那行。 */
-            var g = gen, tp = Date.now(), t0 = el.currentTime, done = false;
-            var fire = function (how) {
-                if (done || g !== gen) { return; }
-                done = true;
-                el.removeEventListener("timeupdate", onTick);
-                if (handlers.firstframe) { handlers.firstframe(how, Date.now() - tp); }
-            };
-            var onTick = function () { if (el.currentTime > t0 + 0.1) { fire("播放头走了"); } };
-            el.addEventListener("timeupdate", onTick);
-            setTimeout(function () { fire("播放头 0.8 秒没走，兜底"); }, 800);
-        });
-        el.addEventListener("ended", function () { if (item && handlers.ended) { handlers.ended(); } });
+        el.addEventListener("seeked", function () { if (pendingPlace && engine === "mse") { place(pendingPlace); pendingPlace = null; } });
+        el.addEventListener("playing", function () { shown(); });
+    }
+
+    /* 这一条出画面了（playing，或 MSE 下播放头已经在新槽里走起来）。 */
+    function shown() {
+        if (told || !item) { return; }
+        if (engine === "mse") {
+            /* seek 还没发出去（现取中），或者播放头还不在这一条的槽里：不是这一条的 playing。 */
+            if (!mseE || !marks.ready || el.currentTime < mseE.base - 0.5 || el.currentTime >= mseE.base + Mse.SLOT) { return; }
+            if (pendingPlace) { place(pendingPlace); pendingPlace = null; }
+        }
+        told = true;
+        var detail = engine === "mse" ? "MSE 槽" + mseE.slot + "，seek 发出 " + marks.ready + " seeked " + (marks.seeked || "?") :
+                     "元数据 " + (marks.loadedmetadata || "?") + " 首帧数据 " + (marks.loadeddata || "?") + " 可播 " + (marks.canplay || "?");
+        var dims = engine === "mse" ? mseE.vw + "x" + mseE.vh : el.videoWidth + "x" + el.videoHeight;
+        Log.report("到画面", (Date.now() - switchAt) + "ms（" + detail + "）" + (playNote ? playNote + " " : "") + "预热=" + usedWarm +
+                   (fellBack ? "（最终地址失败，退回跳转接口）" : "") + " " + dims + " | " + (item.author || "") + " " + item.desc.slice(0, 16));
+        if (handlers.playing) { handlers.playing(item); }
+        /* playing 不等于画面已经上屏：撤封面要等解码器真的在出帧。**requestVideoFrameCallback
+         * 在这台电视上从不回调**（2026-09-29 设备实测：21 次全是 1 秒兜底 —— 视频走硬件视频层，
+         * 不经过网页的合成器）。能用的信号是播放头真的往前走了：playing 时的 currentTime 之后
+         * 再前进一帧多（0.04 秒）。兜底 0.8 秒。晚了多少报进「封面」那行。
+         * 每 20ms 自己看一次，不只靠 timeupdate：它 ~250ms 才来一次，之前「比 playing 晚」的 ~250ms 里
+         * 大半是在等这个事件（2026-09-30）。 */
+        var g = gen, tp = Date.now(), t0 = el.currentTime, done = false, poll = 0;
+        var fire = function (how) {
+            if (done || g !== gen) { clearInterval(poll); return; }
+            done = true;
+            clearInterval(poll);
+            el.removeEventListener("timeupdate", onTick);
+            if (handlers.firstframe) { handlers.firstframe(how, Date.now() - tp); }
+        };
+        var onTick = function () { if (el.currentTime > t0 + 0.04) { fire("播放头走了（+" + (el.currentTime - t0).toFixed(3) + "s）"); } };
+        poll = setInterval(onTick, 20);
+        el.addEventListener("timeupdate", onTick);
+        setTimeout(function () { fire("播放头 0.8 秒没走，兜底"); }, 800);
+    }
+
+    function wireRest() {
+        el.addEventListener("ended", function () { if (item && engine === "src" && handlers.ended) { handlers.ended(); } });
         el.addEventListener("error", function () {
             if (!item) { return; }                       // 拆除时空 src 的回声
+            if (engine === "mse") { mseFatal("元素报错 " + (el.error ? el.error.code + " " + el.error.message : "?")); return; }
             var code = el.error ? el.error.code : 0;
             /* 用的是预热拿到的最终地址、而且还没出过画面：可能是签名过期，退回跳转接口一次。 */
             if (!told && !fellBack && el.src.indexOf("/aweme/v1/play/") < 0) {
@@ -106,8 +154,96 @@ var Player = (function () {
             if (handlers.error) { handlers.error("video error " + code); }
         });
         el.addEventListener("timeupdate", function () {
-            if (item && handlers.progress) { handlers.progress(el.currentTime, el.duration || 0); }
+            if (item && handlers.progress) { handlers.progress(rel(), relDur()); }
         });
+    }
+
+    /* MSE 管线坏了（SourceBuffer 报错、元素报错）：拆掉重建，从这一条的当前位置接着放。一次会话坏到
+     * 第 3 次就整场改走 src —— 别让一个坏掉的管线每条都重建一遍。 */
+    function mseFatal(why) {
+        var it = item, t = told ? rel() : 0, note = playNote;
+        Mse.detach();
+        mseE = null;
+        engine = "";
+        if (!it) { return; }
+        mseFails++;
+        if (mseFails >= 3) { mseOff = why; }
+        Log.report("播放", "MSE 管线坏了（" + why + "），第 " + mseFails + " 次，" + (mseOff ? "这次会话改走 src" : "重建后接着放") + " | " + it.desc.slice(0, 16));
+        play(it, note + "·重建", t);
+    }
+
+    function playSrc(it, startAt) {
+        if (engine === "mse") { Mse.detach(); mseE = null; }
+        engine = "src";
+        pendingPlace = null;
+        place(null);
+        pendingSeek = startAt > 1 ? startAt : 0;
+        /* 整段下载的只留这一条：其余的 blob 立刻放掉（每条几 MB 到几十 MB）。回头看上一条时
+         * 它会走普通地址。 */
+        for (var id in warm) {
+            if (warm.hasOwnProperty(id) && id !== it.id && warm[id].blob) {
+                try { URL.revokeObjectURL(warm[id].url); } catch (e) {}
+                delete warm[id];
+            }
+        }
+        var w = warm[it.id];
+        if (w && w.state === "好了") {
+            usedWarm = (w.mode === "blob" ? "整段" : "开头") + "·好了（" + (w.bytes / 1048576).toFixed(1) + "MB，" +
+                       Math.round((switchAt - w.at) / 1000) + " 秒前备好，用时 " + w.ms + "ms" + (w.moovNote ? "，" + w.moovNote : "") + "）";
+            start(w.url);
+        } else {
+            usedWarm = w ? (w.mode === "blob" ? "整段" : "开头") + "·" + w.state : "无";
+            start(it.url);
+        }
+    }
+
+    function playMse(it, startAt) {
+        if (engine === "src") {
+            try { el.pause(); } catch (e) {}
+            el.removeAttribute("src");
+            try { el.load(); } catch (e) {}
+        }
+        var fresh = !Mse.attached();
+        engine = "mse";
+        usedWarm = Mse.status(it) || "无";
+        var g = gen;
+        Mse.show(it, startAt).then(function (r) {
+            if (g !== gen || !r) { return; }
+            mseE = r.e;
+            marks.ready = Date.now() - switchAt;
+            /* 刚建的管线上没有上一条的画面，直接摆；否则等 seeked（见 pendingPlace）。 */
+            if (fresh) { place(r.e); pendingPlace = null; } else { pendingPlace = r.e; }
+            /* playing 事件是主信号；万一没来（元素一直没停过），播放头在新槽里走起来也算。 */
+            var tick = function () {
+                if (g !== gen || told) { return; }
+                if (!el.paused && el.currentTime > r.target + 0.03) { shown(); }
+                if (Date.now() - switchAt < 15000) { setTimeout(tick, 30); }
+            };
+            tick();
+        }, function (err) {
+            if (g !== gen) { return; }
+            if (err.unusable) {
+                Log.report("播放", "这条改走 src（" + err.message + "）| " + it.desc.slice(0, 16));
+                playSrc(it, startAt);
+                return;
+            }
+            Log.report("播放", "MSE 备不好这条：" + err.message + " | " + it.desc.slice(0, 16));
+            if (handlers.error) { handlers.error("MSE：" + err.message); }
+        });
+    }
+
+    function play(it, note, startAt) {
+        gen++;
+        playNote = note || "";
+        item = it;
+        switchAt = Date.now();
+        marks = {};
+        told = false;
+        fellBack = false;
+        paused = false;
+        lastTime = -1;
+        stuckSince = Date.now();
+        if (useMse(it)) { playMse(it, startAt); } else { playSrc(it, startAt); }
     }
 
     /* 卡死看门狗：心跳驱动，不靠 waiting 事件 —— bilibili 那边两次栽在「事件只发一次、
@@ -127,39 +263,20 @@ var Player = (function () {
     }, 1000);
 
     return {
-        init: function (video) { el = video; wire(); },
+        init: function (video) {
+            el = video;
+            wire();
+            wireRest();
+            Mse.init(video);
+            Mse.on("ended", function () { if (item && engine === "mse" && handlers.ended) { handlers.ended(); } });
+            Mse.on("error", function (why) { if (item && engine === "mse" && handlers.error) { handlers.error(why); } });
+            Mse.on("fatal", function (why) { if (engine === "mse") { mseFatal(why); } });
+        },
         on: function (name, fn) { handlers[name] = fn; },
 
-        play: function (it, note, startAt) {
-            gen++;
-            playNote = note || "";
-            pendingSeek = startAt > 1 ? startAt : 0;
-            item = it;
-            switchAt = Date.now();
-            marks = {};
-            told = false;
-            fellBack = false;
-            paused = false;
-            lastTime = -1;
-            stuckSince = Date.now();
-            /* 整段下载的只留这一条：其余的 blob 立刻放掉（每条几 MB 到几十 MB）。回头看上一条时
-             * 它会走普通地址。 */
-            for (var id in warm) {
-                if (warm.hasOwnProperty(id) && id !== it.id && warm[id].blob) {
-                    try { URL.revokeObjectURL(warm[id].url); } catch (e) {}
-                    delete warm[id];
-                }
-            }
-            var w = warm[it.id];
-            if (w && w.state === "好了") {
-                usedWarm = (w.mode === "blob" ? "整段" : "开头") + "·好了（" + (w.bytes / 1048576).toFixed(1) + "MB，" +
-                           Math.round((switchAt - w.at) / 1000) + " 秒前备好，用时 " + w.ms + "ms" + (w.moovNote ? "，" + w.moovNote : "") + "）";
-                start(w.url);
-            } else {
-                usedWarm = w ? (w.mode === "blob" ? "整段" : "开头") + "·" + w.state : "无";
-                start(it.url);
-            }
-        },
+        play: play,
+        /* 这一条会不会走 MSE（app 按它选切换动画）。 */
+        mseFor: function (it) { return useMse(it); },
 
         /* 预热下一条。不创建任何媒体元素（第二个媒体元素会抢走唯一的解码器，见文件顶部）。
          *   "range"：走 302 拿最终地址 + 取开头 WARM_BYTES —— 焐热 CDN 边缘、省掉起播那一跳。
@@ -168,7 +285,11 @@ var Player = (function () {
          *            退回 range 的效果（起播用跳转接口）。
          * 两种哪个更快是 2026-09-29 的实验，自测构建里轮换比较，见 app.js 的 schedulePreload。 */
         preload: function (it, mode) {
-            if (!it || warm[it.id]) { return; }
+            if (!it) { return; }
+            /* MSE：预热 = 取开头、转封装、append 进它的槽，切过去只剩一次 seek。只在 MSE 管线已经在用时
+             * 做 —— src 放着的时候去建 MediaSource 会把元素抢走。 */
+            if (engine === "mse" && useMse(it)) { Mse.prepare(it).catch(function () {}); return; }
+            if (warm[it.id]) { return; }
             mode = mode || "range";
             var w = warm[it.id] = {state: "在途", at: 0, mode: mode};
             var t0 = Date.now();
@@ -237,12 +358,23 @@ var Player = (function () {
             return paused;
         },
         seek: function (delta) {
-            if (!item || !el.duration) { return; }
+            if (!item) { return; }
+            if (engine === "mse") { if (mseE) { Mse.seekTo(rel() + delta); } return; }
+            if (!el.duration) { return; }
             el.currentTime = Math.max(0, Math.min(el.duration - 0.5, el.currentTime + delta));
         },
-        stop: function () {
+        /* 离开视频页（「我」、登录、空页）。MSE 下只暂停、管线留着：回到同一条直接接着放（不 seek），换一条
+         * 也不用冷启动 —— 拆掉的那一版每次从「我」回来都要 ~2.5 秒（冷启动 + 从中间 seek）。那几个页面是
+         * 不透明的整屏面板，停着的画面盖得住。release=true 才真拆（msespike 要独占解码器）。 */
+        stop: function (release) {
             gen++;
             item = null;
+            pendingPlace = null;
+            if (engine === "mse" && !release) { try { el.pause(); } catch (e) {} return; }
+            if (engine === "mse") { Mse.detach(); }
+            engine = "";
+            mseE = null;
+            place(null);
             try { el.pause(); } catch (e) {}
             el.removeAttribute("src");
             try { el.load(); } catch (e) {}
@@ -251,10 +383,14 @@ var Player = (function () {
         /* 自测 --ab：预热的 moov 补取和不补取轮换。 */
         setMoovAB: function (on) { moovAB = !!on; },
         /* 给自测读的快照，不改任何状态。 */
+        /* 时间、时长、尺寸都是这一条自己的：MSE 下 currentTime 带槽的偏移，videoWidth/Height 停在第一条。 */
         state: function () {
-            return { id: item ? item.id : "", t: el.currentTime, vw: el.videoWidth, vh: el.videoHeight,
-                     net: el.networkState, err: el.error ? el.error.code : 0, src: String(el.currentSrc || el.src || "").slice(0, 40),
-                     elPaused: el.paused, buffered: el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0, dur: el.duration || 0, readyState: el.readyState,
+            var m = engine === "mse" && mseE;
+            return { id: item ? item.id : "", t: rel(), vw: m ? mseE.vw : el.videoWidth, vh: m ? mseE.vh : el.videoHeight,
+                     net: el.networkState, err: el.error ? el.error.code : 0,
+                     src: m ? "mse:槽" + mseE.slot : String(el.currentSrc || el.src || "").slice(0, 40),
+                     elPaused: el.paused, buffered: m ? Mse.aheadEnd() - mseE.base : (el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0),
+                     dur: relDur(), readyState: el.readyState, engine: engine,
                      paused: el.paused, shown: told, sinceSwitch: Date.now() - switchAt,
                      meta: marks.loadedmetadata || 0, warm: usedWarm };
         }

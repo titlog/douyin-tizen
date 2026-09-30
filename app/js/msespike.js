@@ -365,7 +365,7 @@
     }
 
     function takeOver() {
-        Player.stop();
+        Player.stop(true);
         var old = document.getElementById("va");
         if (old) { old.style.display = "none"; }
         ["cover", "mask", "info", "tabs", "loading", "paused", "progress"].forEach(function (id) {
@@ -402,7 +402,7 @@
             R("开始：MediaSource=" + (typeof MediaSource) + " avc1.640028=" + MediaSource.isTypeSupported("video/mp4; codecs=\"avc1.640028\"") +
               " mp4a.40.2=" + MediaSource.isTypeSupported("audio/mp4; codecs=\"mp4a.40.2\"") + " mp4a.40.29=" + MediaSource.isTypeSupported("audio/mp4; codecs=\"mp4a.40.29\""));
             say("装 mp4box");
-            return loadScript("js/vendor/mp4box.js");
+            return typeof MP4Box !== "undefined" ? null : loadScript("js/vendor/mp4box.js");
         }).then(pick).then(function (c) {
             clips = c;
             if (clips.length < 2) { throw new Error("只备好 " + clips.length + " 条，不够比"); }

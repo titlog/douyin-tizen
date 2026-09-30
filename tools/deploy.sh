@@ -14,8 +14,9 @@ for a in "$@"; do
     --selftest) SELFTEST=true ;;
     --soak) SELFTEST='"soak"' ;;
     --qr) SELFTEST='"qr"' ;;
-    --ab) SELFTEST='"ab"' ;;      # 同一轮里轮换切换方式 / 预热方式，连刷 50 条（约 7 分钟）
+    --ab) SELFTEST='"ab"' ;;      # 同一轮里逐条轮换两种切换动画，连刷 30 条（约 4 分钟）
     --mse) SELFTEST='"mse"' ;;    # MSE 常驻管线探测：换 src 和 seek 到预塞的时间槽，同一轮对比（约 3 分钟）
+    --seek) SELFTEST='"seek"' ;;  # 长视频里来回跳到没缓冲的地方，量 seek 多久（约 3 分钟）
   esac
 done
 # 应用 id 从 config.xml 读，不写死 —— bilibili 那边改过一次应用名，安装器推旧包、启动步骤

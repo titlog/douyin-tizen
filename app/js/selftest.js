@@ -186,8 +186,13 @@
                 } else {
                     check("未登录时「我」出二维码", window.__app.tab() === "me" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
                 }
-                key(KEY.LEFT);                       // 回推荐
-                return waitShown("", 15000).then(function () { return wait(1500); });
+                key(KEY.LEFT);                       // 回推荐：管线只是暂停着（Player.stop），该是原地接着放
+                return waitShown("", 15000).then(function (ms) {
+                    var s1 = st();
+                    check("从「我」回到推荐接着放", ms >= 0 && s1.id === recId && s1.t >= recT - 1,
+                          "出画面 " + ms + "ms，同一条=" + (s1.id === recId) + "，离开时 " + recT.toFixed(1) + "s，现在 " + s1.t.toFixed(1) + "s");
+                    return wait(1500);
+                });
             }).then(function () {
                 key(KEY.LEFT);                       // 到关注
                 return logged ? waitShown(recId, 20000) : waitQr(20000);
@@ -286,46 +291,97 @@
         return s[Math.floor(s.length / 2)];
     }
 
-    /* --ab：只刷，同一轮里轮换两组做法（跨两轮比较会被网络骗，见 CLAUDE.md）。
-     *   切换方式："cover"（新封面盖满 250ms 再换源）和 "early"（按键就换源）逐条轮换，
-     *            比的是从按键算起的 playing / 撤封面。
-     *   预热：补取到 moov 末尾 + 512KB / 只取开头 512KB，按视频 id 奇偶分（player.js），比的是元数据。 */
+    /* --ab：只刷，同一轮里逐条轮换两种切换动画（跨两轮比较会被网络骗，见 CLAUDE.md），比从按键算起的
+     * playing / 撤封面，以及推的那一刻封面图是不是当场就有（预热时下好、解好的）。
+     *   "cover"：旧视频原地接着播，新的一页盖上来，盖到 ~99% 才 seek；"early"：按键就 seek。
+     * 2026-09-29/30 比过的 cover / early、moov 补取 / 不补，结论在 CLAUDE.md。 */
     function ab() {
-        var N = 50, i = 0, from = 0;
-        Player.setMoovAB(true);
+        var N = 30, i = 0, from = 0, ARMS = ["cover", "early"];
         function one() {
             if (i >= N) { return Promise.resolve(); }
-            window.__app.setPush(i % 2 ? "early" : "cover");
+            window.__app.setPush(ARMS[i % 2]);
             i++;
             var before = st().id;
             key(KEY.DOWN);
             return waitShown(before, 15000).then(function () { return wait(6000); }).then(one);
         }
         return waitShown("", 40000).then(function () {
-            Log.report("AB", "开始：连刷 " + N + " 条，每条看 6 秒；cover/early 逐条轮换，预热补取/不补取按视频 id 奇偶分");
+            Log.report("AB", "开始：连刷 " + N + " 条，每条看 6 秒；" + ARMS.join(" / ") + " 逐条轮换");
             return wait(4000);
         }).then(function () {
             from = window.__app.records().length;
             return one();
         }).then(function () {
             var rs = window.__app.records().slice(from);
-            ["cover", "early"].forEach(function (m) {
+            ARMS.forEach(function (m) {
                 var g = rs.filter(function (r) { return r.push === m; });
-                var warmOk = g.filter(function (r) { return r.warm.indexOf("好了") >= 0; });
-                Log.report("AB", "切换 " + m + "：" + g.length + " 次（预热好了 " + warmOk.length + "），按键→playing 中位 " +
+                var warm = g.filter(function (r) { return r.warm.indexOf("槽里有") >= 0 || r.warm.indexOf("好了") >= 0; });
+                var coverNow = g.filter(function (r) { return r.cover === 0; });
+                Log.report("AB", "切换 " + m + "：" + g.length + " 次（预热好了 " + warm.length + "，封面当场就有 " + coverNow.length + "），按键→playing 中位 " +
                            median(g.map(function (r) { return r.playing; })) + "ms，按键→撤封面 中位 " + median(g.map(function (r) { return r.frame; })) +
                            "ms | 全部=" + g.map(function (r) { return r.frame; }).join(","));
             });
-            [["补取", "moov 补取"], ["不补（对照）", "moov 不补"]].forEach(function (arm) {
-                var g = rs.filter(function (r) { return r.warm.indexOf("好了") >= 0 && r.warm.indexOf(arm[0]) >= 0; });
-                Log.report("AB", arm[1] + "：" + g.length + " 次，元数据 中位 " + median(g.map(function (r) { return r.meta; })) +
-                           "ms | 全部=" + g.map(function (r) { return r.meta; }).join(","));
-            });
+            window.__app.setPush("auto");
             Log.report("AB", "结束");
         }, function (e) { Log.report("AB", "中止：" + e.message); });
     }
 
-    var MODES = {soak: soak, qr: qrOnly, ab: ab};
+    /* --seek：在一条长视频里来回跳 ±120 秒，量从跳转到播放头走起来多久。跳转对齐到关键帧（mse.js 的
+     * seekTo）之前中位 966ms，之后 258ms。 */
+    function seekRun() {
+        var N = 24, i = 0, res = [], v = document.getElementById("va");
+        function findLong() {
+            var n = 0;
+            function go() {
+                var s = st();
+                if (s.shown && s.engine === "mse" && s.dur > 400 && s.t < 120) { return Promise.resolve(true); }
+                if (n++ >= 20) { return Promise.resolve(false); }
+                var before = s.id;
+                key(KEY.DOWN);
+                return waitShown(before, 15000).then(function () { return wait(800); }).then(go);
+            }
+            return go();
+        }
+        function one() {
+            if (i >= N) { return Promise.resolve(); }
+            var delta = i % 2 ? -120 : 120;
+            i++;
+            var a = st(), t0 = Date.now(), seekedMs = -1, landed = -1;
+            var onSeeked = function () { if (seekedMs < 0) { seekedMs = Date.now() - t0; } };
+            v.addEventListener("seeked", onSeeked);
+            Player.seek(delta);
+            /* 「动起来」= seek 结束后播放头又走了 0.1 秒。seeked 事件在这台电视上偶尔不来，不靠它。 */
+            function poll() {
+                var s = st();
+                if (s.id !== a.id) { return Promise.resolve(-2); }
+                if (!v.seeking) {
+                    if (landed < 0) { landed = s.t; } else if (s.t > landed + 0.1) { return Promise.resolve(Date.now() - t0); }
+                }
+                if (Date.now() - t0 > 10000) { return Promise.resolve(-1); }
+                return wait(50).then(poll);
+            }
+            return poll().then(function (ms) {
+                v.removeEventListener("seeked", onSeeked);
+                Log.report("SEEK", "第 " + i + " 次 " + (delta > 0 ? "+" : "") + delta + "s → " + st().t.toFixed(0) +
+                           "s：seeked " + seekedMs + "ms，动起来 " + ms + "ms | " + Mse.lastSeek());
+                if (ms === -2) { i = N; return; }
+                res.push({seeked: seekedMs, moved: ms});
+                return wait(4000);
+            }).then(one);
+        }
+        return waitShown("", 40000).then(findLong).then(function (ok) {
+            if (!ok) { throw new Error("刷了 20 条没找到 400 秒以上的视频"); }
+            Log.report("SEEK", "开始：" + N + " 次 ±120 秒跳转");
+            return one();
+        }).then(function () {
+            var g = res.filter(function (r) { return r.moved >= 0; });
+            Log.report("SEEK", g.length + "/" + res.length + " 次成功，动起来 中位 " + median(g.map(function (r) { return r.moved; })) +
+                       "ms | 全部=" + g.map(function (r) { return r.moved; }).join(","));
+            Log.report("SEEK", "结束");
+        }, function (e) { Log.report("SEEK", "中止：" + e.message); });
+    }
+
+    var MODES = {soak: soak, qr: qrOnly, ab: ab, seek: seekRun};
     if (SELFTEST === "mse") { return; }                 // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();

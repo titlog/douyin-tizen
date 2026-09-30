@@ -51,8 +51,15 @@
      * 设备实测移动 <video> 会让随后的起播慢 0.3–0.4 秒（见 CLAUDE.md）。"early" 要回答的是
      * 动画和建管线同时进行会不会也互相拖慢 —— 2026-09-30 两轮 --ab（同一轮里和 "cover" 逐条轮换）：
      * 按键→撤封面 early 1429 / cover 1750ms（换源→playing 1246 / 1261，没拖慢），另一轮 1522 / 1539。
-     * 两轮都不比 cover 慢，默认改为 "early"。 */
-    var PUSH_MODE = "early";
+     * 两轮都不比 cover 慢，默认改为 "early"。
+     * "auto"（2026-09-30 起默认）：下一条走 MSE 就用 "cover"，走 src 用 "early"。MSE 下 early 按键那一刻就 seek，
+     * 硬件视频层先冻在最后一帧、再黑一下，黑底封面才盖上来 —— 用户看到「又有最后一帧又黑屏」。"cover" 让旧视频
+     * 原地接着播，新的一页（黑底 + 预热好的封面）从下面盖上来，盖到 ~99%（COVER_SEEK_MS）才 seek。
+     * "video"（让 <video> 自己滑走、真的推）在 MSE 下试过：移动过元素之后 seek 慢 ~1.1 秒、起播后还卡 ~1 秒，
+     * 按键→撤封面 video 1661 / early 589ms（同一轮各 15 次）。不许动 <video> 的位置。 */
+    var PUSH_MODE = "auto";
+    var COVER_SEEK_MS = 200;  // "cover"：盖到这时（缓动曲线走到 ~99%）才 seek，旧画面冻结 / 变黑只剩顶上几个像素
+    var coverPre = {};        // 预热时下好、解好的封面图（url → Image），推的时候直接贴，不再等 60–230ms
     var records = [];         // 每次切换的计时，自测 --ab 读
     var bootAt = Date.now();
     var bootMarks = {};
@@ -102,6 +109,7 @@
         if (v !== "feed") {
             $("cover").className = "";
             clearTimeout(pushTimer);
+            pushTimer = 0;
             resetSlide($("va"));
             resetSlide($("cover"));
             $("mask").className = "";
@@ -153,11 +161,18 @@
         im.style.left = box.l + "px"; im.style.top = box.t + "px";
         im.style.width = box.w + "px"; im.style.height = box.h + "px";
         im.style.backgroundImage = "none";
-        cv.className = push === "early" ? "show solid" : "show";
+        /* 推进来的是一整页（黑底 + 封面）：只滑封面图的话，竖屏视频两侧露着旧画面，到换源那一刻才被黑幕
+         * 一下盖黑。 */
+        var page = !!push;
+        cv.className = page ? "show solid" : "show";
         resetSlide(cv);
         resetSlide(im);
-        slideIn(push === "early" ? cv : im, dir);
-        if (item.cover) {
+        var pre = item.cover && coverPre[item.cover];
+        if (pre && pre.complete && pre.naturalWidth) {
+            sw.coverMs = 0;
+            sw.ar = pre.naturalWidth / pre.naturalHeight;
+            im.style.backgroundImage = "url(\"" + item.cover + "\")";
+        } else if (item.cover) {
             var img = new Image();
             img.onload = function () {
                 if (switchInfo !== sw) { return; }         // 图到的时候观众已经切走了
@@ -167,6 +182,7 @@
             };
             img.src = item.cover;
         }
+        slideIn(page ? cv : im, dir);
         $("bar").style.width = "0";
         $("paused").className = "";
         $("progress").className = "";
@@ -202,21 +218,28 @@
         var v = $("va");
         clearTimeout(preloadTimer);
         /* 连按时上一次的推还没推完：直接收尾，别让两段动画叠在一起。 */
+        var wasPushing = !!pushTimer;
         clearTimeout(pushTimer);
-        resetSlide(v);
+        pushTimer = 0;
         var ps = Player.state();
-        var push = !!dir && ps.shown && !!ps.vw ? PUSH_MODE : "";
+        var mode = PUSH_MODE === "auto" ? (Player.mseFor(item) ? "cover" : "early") : PUSH_MODE;
+        var push = !!dir && ps.shown && !!ps.vw ? mode : "";
+        /* "video" 连按：旧视频正在滑走，让它接着滑，别先弹回原位再滑一遍。 */
+        var keepSliding = wasPushing && push === "video";
+        if (!keepSliding) { resetSlide(v); }
         render(item, dir, push);
         if (!push || push === "early") {
             Player.play(item, TABS[tab].name + (push ? "·推(early)" : ""), startAt);
             return;
         }
-        if (push === "video") { slideOut(v, dir); }
+        if (push === "video" && !keepSliding) { slideOut(v, dir); }
         pushTimer = setTimeout(function () {
-            $("mask").className = "over";
+            pushTimer = 0;
+            /* "cover" 推上来的是整页黑底，已经盖满，不用黑幕。 */
+            if (push !== "cover") { $("mask").className = "over"; }
             resetSlide(v);
-            Player.play(item, TABS[tab].name + "·推(" + PUSH_MODE + ")", startAt);
-        }, 250);
+            Player.play(item, TABS[tab].name + "·推(" + push + ")", startAt);
+        }, push === "cover" ? COVER_SEEK_MS : 250);
     }
 
     /* 画面起来 1.5 秒后再预热下一条（只是 XHR，不碰解码器，见 player.js）：别和正在起播的
@@ -230,7 +253,14 @@
             var nx = feed().peek(n);
             if (!nx) { return; }
             Player.preload(nx, PRELOAD_MODE);
-            if (nx.cover) { (new Image()).src = nx.cover; }
+            if (nx.cover && !coverPre[nx.cover]) {
+                var ci = new Image();
+                ci.src = nx.cover;
+                if (ci.decode) { ci.decode().catch(function () {}); }
+                coverPre[nx.cover] = ci;
+                var keys = Object.keys(coverPre);
+                if (keys.length > 6) { delete coverPre[keys[0]]; }
+            }
         };
         preloadTimer = setTimeout(function () {
             warmOne(1);
@@ -409,25 +439,36 @@
         schedulePreload();
     });
     /* 播放头真的走起来了才撤封面、放下黑幕（见 player.js）。 */
+    /* 滑进来的动画（250ms）没走完不撤封面：MSE 下切换只要 ~0.25 秒，首帧可能赶在动画前面，
+     * 这时撤掉就是动画滑到一半突然没了。 */
+    var SLIDE_MS = 250;
     Player.on("firstframe", function (how, lateMs) {
+        var sw = switchInfo;
+        var left = sw && sw.push ? SLIDE_MS + 10 - (Date.now() - sw.at) : 0;
+        if (left > 0) {
+            setTimeout(function () { if (switchInfo === sw) { uncover(sw, how + "（等动画 " + left + "ms）", lateMs); } }, left);
+            return;
+        }
+        uncover(sw, how, lateMs);
+    });
+    function uncover(sw, how, lateMs) {
         $("cover").className = "";
         $("mask").className = "";
-        var sw = switchInfo;
         if (sw && !sw.playing) {
             sw.playing = true;
             var ps = Player.state();
             var ar = function (x) { return x ? x.toFixed(2) : "?"; };
             /* 「到画面」那行从换源算起；"cover" 模式换源比按键晚 250ms，模式之间要比就得从按键算。 */
             var rec = {push: sw.push || "无", playing: sw.playingAt ? sw.playingAt - sw.at : -1, frame: Date.now() - sw.at,
-                       meta: ps.meta, warm: ps.warm, dur: Math.round(sw.item.dur / 1000)};
+                       meta: ps.meta, warm: ps.warm, dur: Math.round(sw.item.dur / 1000), cover: sw.coverMs};
             records.push(rec);
             if (records.length > 500) { records.shift(); }
             Log.report("封面", (sw.coverMs < 0 ? "出画面时图还没到" : "图 " + sw.coverMs + "ms 到") + "（" + (sw.item.coverKind || "缓存条目") + "），比例 封面 " + ar(sw.ar) +
                        " / 接口给的视频 " + ar(sw.item.h ? sw.item.w / sw.item.h : 0) + " / 实际解码 " + ar(ps.vh ? ps.vw / ps.vh : 0) +
                        " | 撤封面：" + how + "，比 playing 晚 " + lateMs + "ms" +
-                       " | 按键→playing " + rec.playing + "ms →撤封面 " + rec.frame + "ms" + (sw.push ? " 推(" + sw.push + ")" : ""));
+                       " | 按键→playing " + rec.playing + "ms →撤封面 " + rec.frame + "ms" + (sw.push ? " 推(" + sw.push + ")" : "") + " " + (ps.engine || ""));
         }
-    });
+    }
     Player.on("ended", function () { next("播完"); });
     Player.on("progress", function (t, d) {
         if (d) { $("bar").style.width = (t / d * 100).toFixed(2) + "%"; }

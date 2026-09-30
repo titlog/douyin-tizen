@@ -104,14 +104,26 @@ function scanFile(file, known) {
   for (const d of declared) { known.add(d); }
 }
 
+/* 第三方的压缩代码不扫（满是单字母名字），只记下它往全局放了什么。 */
+const VENDOR_GLOBALS = { "vendor/mp4box.js": ["MP4Box"] };
+
 const known = new Set();
-for (const f of ORDER) { scanFile(f, known); }
+for (const f of ORDER) {
+  if (f.startsWith("vendor/")) {
+    if (!VENDOR_GLOBALS[f]) { console.log(`✗ ${f}: 第三方文件没登记它的全局名字（VENDOR_GLOBALS）`); failed = true; continue; }
+    for (const g of VENDOR_GLOBALS[f]) { known.add(g); }
+    console.log(`✓ ${f}（第三方，不扫）`);
+    continue;
+  }
+  scanFile(f, known);
+}
 
 /* Every id the app reaches for must exist in the markup or be built by it. */
 const html = fs.readFileSync(new URL("../app/index.html", import.meta.url).pathname, "utf8");
 const htmlIds = new Set([...html.matchAll(/id="([\w-]+)"/g)].map((m) => m[1]));
 const jsIds = new Set();
 for (const f of ORDER) {
+  if (f.startsWith("vendor/")) { continue; }
   const src = fs.readFileSync(path.join(APP, f), "utf8");
   for (const m of src.matchAll(/(?:\$|getElementById)\("([\w-]+)"\)/g)) { jsIds.add(m[1]); }
   /* ids created from template strings count as present */
