@@ -32,7 +32,7 @@ var Player = (function () {
     var USE_MSE = true;
     var engine = "";           // "mse" | "src" | ""（停着）
     var mseE = null;           // MSE：正在放的那条（Mse 的条目：base、dur、vw、vh、slot）
-    var pendingPlace = null;   // MSE：seeked 那一刻再按新尺寸摆框 —— 早了会把上一条的最后一帧拉变形
+    var boxKey = "", boxAt = 0;   // MSE：元素的框上一次真的变了是什么时候（「封面」那行报改框到撤封面隔了多久）
     var mseFails = 0, mseOff = "";
     var el = null;
     var gen = 0;
@@ -65,10 +65,14 @@ var Player = (function () {
     function mb(n) { return (n / 1048576).toFixed(1) + "MB"; }
 
     /* MSE 下 videoWidth/Height 永远停在第一条（设备实测），元素按它 contain 摆放，换了比例的视频就变形。
-     * 框直接摆成这一条该占的区域、object-fit: fill；src 下还原成 CSS 里的全屏 contain。 */
+     * 框直接摆成这一条该占的区域、object-fit: fill；src 下还原成 CSS 里的全屏 contain。
+     * **seek 发出的同一刻就摆**（这时旧画面在整页封面下面，拉变形了也看不见），撤封面时新框已经生效了
+     * 250–430ms。光这样还不够：封面完全不透明时新框根本送不出去，见 app.css 里 #cover 的 opacity。 */
     function place(e) {
         var s = el.style;
-        if (!e || !e.vw || !e.vh) { s.left = s.top = s.width = s.height = s.objectFit = ""; return; }
+        var key = e && e.vw && e.vh ? e.vw + "x" + e.vh : "";
+        if (key !== boxKey) { boxKey = key; boxAt = Date.now(); }
+        if (!key) { s.left = s.top = s.width = s.height = s.objectFit = ""; return; }
         var sc = Math.min(1920 / e.vw, 1080 / e.vh), W = Math.round(e.vw * sc), H = Math.round(e.vh * sc);
         s.left = Math.round((1920 - W) / 2) + "px";
         s.top = Math.round((1080 - H) / 2) + "px";
@@ -99,7 +103,6 @@ var Player = (function () {
         ["loadedmetadata", "loadeddata", "canplay", "seeked"].forEach(function (name) {
             el.addEventListener(name, function () { if (!told && !marks[name]) { marks[name] = Date.now() - switchAt; } });
         });
-        el.addEventListener("seeked", function () { if (pendingPlace && engine === "mse") { place(pendingPlace); pendingPlace = null; } });
         el.addEventListener("playing", function () { shown(); });
     }
 
@@ -109,7 +112,6 @@ var Player = (function () {
         if (engine === "mse") {
             /* seek 还没发出去（现取中），或者播放头还不在这一条的槽里：不是这一条的 playing。 */
             if (!mseE || !marks.ready || el.currentTime < mseE.base - 0.5 || el.currentTime >= mseE.base + Mse.SLOT) { return; }
-            if (pendingPlace) { place(pendingPlace); pendingPlace = null; }
         }
         told = true;
         var detail = engine === "mse" ? "MSE 槽" + mseE.slot + "，seek 发出 " + marks.ready + " seeked " + (marks.seeked || "?") :
@@ -175,7 +177,6 @@ var Player = (function () {
     function playSrc(it, startAt) {
         if (engine === "mse") { Mse.detach(); mseE = null; }
         engine = "src";
-        pendingPlace = null;
         place(null);
         pendingSeek = startAt > 1 ? startAt : 0;
         /* 整段下载的只留这一条：其余的 blob 立刻放掉（每条几 MB 到几十 MB）。回头看上一条时
@@ -203,7 +204,6 @@ var Player = (function () {
             el.removeAttribute("src");
             try { el.load(); } catch (e) {}
         }
-        var fresh = !Mse.attached();
         engine = "mse";
         usedWarm = Mse.status(it) || "无";
         var g = gen;
@@ -211,8 +211,7 @@ var Player = (function () {
             if (g !== gen || !r) { return; }
             mseE = r.e;
             marks.ready = Date.now() - switchAt;
-            /* 刚建的管线上没有上一条的画面，直接摆；否则等 seeked（见 pendingPlace）。 */
-            if (fresh) { place(r.e); pendingPlace = null; } else { pendingPlace = r.e; }
+            place(r.e);
             /* playing 事件是主信号；万一没来（元素一直没停过），播放头在新槽里走起来也算。 */
             var tick = function () {
                 if (g !== gen || told) { return; }
@@ -369,7 +368,6 @@ var Player = (function () {
         stop: function (release) {
             gen++;
             item = null;
-            pendingPlace = null;
             if (engine === "mse" && !release) { try { el.pause(); } catch (e) {} return; }
             if (engine === "mse") { Mse.detach(); }
             engine = "";
@@ -392,7 +390,8 @@ var Player = (function () {
                      elPaused: el.paused, buffered: m ? Mse.aheadEnd() - mseE.base : (el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0),
                      dur: relDur(), readyState: el.readyState, engine: engine,
                      paused: el.paused, shown: told, sinceSwitch: Date.now() - switchAt,
-                     meta: marks.loadedmetadata || 0, warm: usedWarm };
+                     meta: marks.loadedmetadata || 0, warm: usedWarm,
+                     box: boxAt >= switchAt ? Date.now() - boxAt : -1 };   // 这次切换改了框的话，改了多久
         }
     };
 })();

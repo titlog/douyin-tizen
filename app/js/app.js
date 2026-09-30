@@ -466,7 +466,8 @@
             Log.report("封面", (sw.coverMs < 0 ? "出画面时图还没到" : "图 " + sw.coverMs + "ms 到") + "（" + (sw.item.coverKind || "缓存条目") + "），比例 封面 " + ar(sw.ar) +
                        " / 接口给的视频 " + ar(sw.item.h ? sw.item.w / sw.item.h : 0) + " / 实际解码 " + ar(ps.vh ? ps.vw / ps.vh : 0) +
                        " | 撤封面：" + how + "，比 playing 晚 " + lateMs + "ms" +
-                       " | 按键→playing " + rec.playing + "ms →撤封面 " + rec.frame + "ms" + (sw.push ? " 推(" + sw.push + ")" : "") + " " + (ps.engine || ""));
+                       " | 按键→playing " + rec.playing + "ms →撤封面 " + rec.frame + "ms" + (sw.push ? " 推(" + sw.push + ")" : "") + " " + (ps.engine || "") +
+                       (ps.box >= 0 ? " | 改框→撤封面 " + ps.box + "ms" : ""));
         }
     }
     Player.on("ended", function () { next("播完"); });

@@ -26,6 +26,11 @@ video {
 video { z-index: 0; }
 #mask.over { z-index: 1; }
 #cover { z-index: 1; }
+/* **盖在视频上的这两层不许完全不透明**（0.99，底下的视频透出 1%，看不出来）。硬件视频层的位置尺寸是合成器
+ * 画视频那一层时送给播放器的；被完全不透明的层盖住，合成器按遮挡把这一层跳过，新框一直没送 —— 撤封面那一刻
+ * 才送、播放器再异步应用，新视频头几帧按上一条的框画：竖屏的拉满全屏、横屏的挤成竖条（用户：「横竖切换抖
+ * 一下」）。只把改框提前到 seek 那一刻，用户看还是抖；加上 0.99，用户看不抖了（2026-09-30）。 */
+#cover, #mask { opacity: 0.99; }
 
 /* 登录框：官网的 login_page。放在屏幕内、完全透明、压在我们的登录界面下面 —— 挪到屏幕
  * 外的跨域框会被 Chromium 节流（定时器、渲染降频），拖慢官网出码。要有真实尺寸，
@@ -35,8 +40,9 @@ iframe.login-frame { position: absolute; left: 0; top: 0; width: 1280px; height:
 /* 桥接框：必须在文档里才加载，但观众不该看见它。 */
 iframe.bridge { position: absolute; left: 0; top: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
 
+/* 作者、标题那层在右下角、居右（用户要求，2026-09-30）。 */
 #info {
-  position: absolute; left: 80px; bottom: 70px; width: 900px;
+  position: absolute; right: 80px; bottom: 70px; width: 900px; text-align: right;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
   opacity: 0; transition: opacity 0.4s;
 }
