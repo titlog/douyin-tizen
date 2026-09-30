@@ -685,6 +685,8 @@
 
     window.onload = function () {
         Log.report("engine", navigator.userAgent);
+        /* 服务器还推不推看过的：这些天的累计（见 feed.js 的 watchedReport）。 */
+        Log.report("看过", Feed.watchedReport());
         registerKeys();
         document.addEventListener("keydown", onKey);
         Player.init($("va"));

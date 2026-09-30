@@ -56,6 +56,50 @@ var Feed = (function () {
     }
     function isWatched(id) { loadWatched(); return !!watched[id]; }
 
+    /* 服务器自己还推不推看过的（2026-09-30 起计）：本地过滤是兜底，也是测量。推荐 / 精选每回一页，按天记下新条目几条、
+     * 其中电视上看过的几条，再记每天放了几条。收集器平时不开，所以存在电视上，启动时报一行「看过:」—— 哪天开收集器、
+     * 打开一次 App 就读得到这些天的累计。看过的一直是 0，说明服务器自己去重了，本地过滤可以删；不是 0，就是它在兜底。
+     * 自测构建不计（它刷得飞快，也不上报）。 */
+    var STATS_KEY = "dy.watched.stats.v1", STATS_DAYS = 30;
+    function selftest() { return typeof SELFTEST !== "undefined" && !!SELFTEST; }
+    function today() {
+        var d = new Date(), p = function (n) { return (n < 10 ? "0" : "") + n; };
+        return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+    }
+    function loadStats() {
+        var s = null;
+        try { s = JSON.parse(localStorage.getItem(STATS_KEY) || "null"); } catch (e) {}
+        return s && s.days ? s : {since: Date.now(), days: {}};
+    }
+    /* what："played"，或者流的 kind（带 fresh、old 两个数）。 */
+    function bump(what, fresh, old) {
+        if (selftest()) { return; }
+        var s = loadStats(), d = today();
+        var day = s.days[d] || (s.days[d] = {p: 0});
+        if (what === "played") { day.p++; }
+        else { var k = day[what] || (day[what] = [0, 0]); k[0] += fresh; k[1] += old; }
+        var keys = Object.keys(s.days).sort();
+        while (keys.length > STATS_DAYS) { delete s.days[keys.shift()]; }
+        try { localStorage.setItem(STATS_KEY, JSON.stringify(s)); } catch (e) {}
+    }
+    function watchedReport() {
+        var s = loadStats(), keys = Object.keys(s.days).sort();
+        var sum = {recommend: [0, 0], jingxuan: [0, 0]}, played = 0, days = [];
+        var pct = function (k) { return k[0] + k[1] ? " 条里看过的 " + k[1] + " 条（" + (k[1] * 100 / (k[0] + k[1])).toFixed(1) + "%）" : " 条"; };
+        keys.forEach(function (d) {
+            var day = s.days[d], r = day.recommend || [0, 0], j = day.jingxuan || [0, 0];
+            sum.recommend[0] += r[0]; sum.recommend[1] += r[1];
+            sum.jingxuan[0] += j[0]; sum.jingxuan[1] += j[1];
+            played += day.p || 0;
+            days.push(d.slice(5) + " 放 " + (day.p || 0) + " · 推荐 " + r[1] + "/" + (r[0] + r[1]) + " · 精选 " + j[1] + "/" + (j[0] + j[1]));
+        });
+        loadWatched();
+        var since = new Date(s.since);
+        return "自 " + (since.getMonth() + 1) + "-" + since.getDate() + " " + since.toTimeString().slice(0, 5) + " 起放了 " + played + " 条；" +
+               "推荐回了 " + (sum.recommend[0] + sum.recommend[1]) + pct(sum.recommend) + "，精选回了 " + (sum.jingxuan[0] + sum.jingxuan[1]) + pct(sum.jingxuan) +
+               " | 按天（放了 · 看过的/回的）" + (days.join("，") || "还没有") + " | 本地记着 " + watchedList.length + " 条看过的";
+    }
+
     var reportsTold = 0;
     /* 一条开始放了：照官网的样子告诉服务器（2026-09-30 从官网的 JS 里读出来的）：
      *   POST /aweme/v2/web/aweme/stats/     正文 aweme_type、item_id、source=0、play_delta=1（官网在「videoPlay」时发）
@@ -63,7 +107,8 @@ var Feed = (function () {
      *                                       看到 95% 以上为 1）—— 只在登录时发，未登录官网也不发（它会回 8）
      * 自测构建不报也不记：它刷得飞快，几十条「秒划」记进账号的观看历史会带偏推荐。 */
     function played(item, pre) {
-        if (typeof SELFTEST !== "undefined" && SELFTEST) { return; }
+        if (selftest()) { return; }
+        if (!isWatched(item.id)) { bump("played"); }
         markWatched(item.id);
         var enc = encodeURIComponent;
         /* 两个都回 status_code（电视上 stats 回 0；桌面测试台里 stats 回 200 + 空正文，记成「空」）。
@@ -231,16 +276,18 @@ var Feed = (function () {
             inflight = K.fetch(page, opts || {}).then(function (r) {
                 page.n++;
                 more = r.more;
-                var added = 0, dup = 0, old = 0, why = [];
+                var added = 0, dup = 0, old = 0, fresh = 0, why = [];
                 for (var i = 0; i < r.list.length; i++) {
                     var it = normalise(r.list[i], why);
                     if (!it) { continue; }
                     if (seen[it.id]) { dup++; continue; }
                     if (K.skipWatched && isWatched(it.id)) { seen[it.id] = true; old++; continue; }
+                    if (K.skipWatched) { fresh++; }
                     seen[it.id] = true;
                     items.push(it);
                     added++;
                 }
+                if (K.skipWatched) { bump(kind, fresh, old); }
                 Log.report("feed", K.name + " 第" + n + "次 " + (Date.now() - t0) + "ms 回 " + r.list.length + " 条，新增 " + added +
                            (dup ? "，重复 " + dup : "") + (old ? "，电视上看过 " + old : "") + (why.length ? "，跳过 " + why.join("/") : "") +
                            (r.status ? "，status_code=" + r.status : "") + (more ? "" : "，没有更多了") +
@@ -320,6 +367,7 @@ var Feed = (function () {
     return {
         create: create,
         played: played,
+        watchedReport: watchedReport,
         clearCache: function () {
             for (var k in KINDS) { if (KINDS.hasOwnProperty(k)) { try { localStorage.removeItem(cacheKey(k)); } catch (e) {} } }
         }
