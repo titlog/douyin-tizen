@@ -378,10 +378,10 @@ robots.txt 不会；框落到 robots.txt 就算登录完成。二维码图片搬
 - 横竖屏、不同分辨率（1920x1080 / 1440x1080 / 1080x1920）、不同 H.264 level（`avc1.640028` / `640032`）混在
   一个 SourceBuffer 里都能放，seek 不因此变慢。
 - **`videoWidth/Height` 永远停在第 0 条的尺寸，一次 `resize` 事件都没有**（两轮 26 次全是）。元素按它 contain 摆放，
-  换了比例的视频画面比例**很可能**不对（屏幕上到底变没变形，日志看不出来，要人眼确认）。修正：每次 seek 前把元素的框直接摆成这一条该占的区域（`fitBox`）、
+  换了比例的视频画面比例会不对。修正（用户 09-30 看过，横竖交替刷比例是对的）：每次 seek 前把元素的框直接摆成这一条该占的区域（`fitBox`）、
   `object-fit: fill` —— 同一轮交替量过，修正 251ms / 不修正 249ms，改框不拖慢 seek。
 - 音频全是 HE-AAC v2（`mp4a.40.29`，44.1kHz），`isTypeSupported` 为 true、append 不报错、`buffered` 里音视频交集
-  正常。**有没有声音没人听过** —— 做成播放器之前要确认。
+  正常。**有声音**（用户 09-30 在 MSE 播放器上听过）。
 - mp4box.js 在电视上转一条（moov 0.1–0.9MB + 3MB）要 160–800ms，只能放在预热里做。
 - **mp4box.js 的 dist 在顶层声明了 `var Log`**，直接 `<script>` 装进来会覆盖我们的 `Log`。`js/vendor/mp4box.js`
   外面包了一层函数，只往全局放 `MP4Box`。
@@ -452,7 +452,5 @@ seek 却又拖了 2 秒，那段时间 append 了 77 段 —— 看着像。做�
 - 封面图在预热时下好、`decode()`、Image 对象留住（`coverPre`），推的时候同步贴上 —— 之前只 `new Image()` 了一下没留住，
   渲染时还要再等 60–230ms，推的前半段是个黑框。现在 30/30 当场就有。
 
-**还要人眼人耳确认的**（日志看不出来）：
-- 有没有声音（HE-AAC v2 经 MSE 放）。
-- 换了比例的下一条画面比例对不对（`videoWidth/Height` 停在第一条，框由 `place()` 按这一条的尺寸摆、`object-fit: fill`）。
-- cover 模式盖上来的那 200ms 顺不顺、封面换成视频那一下跳不跳。
+**用户 09-30 看过、听过**：cover 模式「好多了」；有声音（HE-AAC v2 经 MSE）；横竖屏交替刷比例对
+（`videoWidth/Height` 停在第一条，框由 `place()` 按这一条的尺寸摆、`object-fit: fill`）。
