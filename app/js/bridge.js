@@ -204,7 +204,9 @@ var Bridge = (function () {
         return ready();
     }
 
-    function request(method, path, params, body) {
+    /* quiet：上报一类的请求（播放一次、观看历史）。aweme/stats 正常就回 200 + 空正文（2026-09-30，页面在 douyin.com 上、
+     * cookie 齐全的测试台里也一样），空正文算成功；失败也不计入「连续 3 次失败就重建框」—— 为了一个上报拆掉签名桥不值。 */
+    function request(method, path, params, body, quiet) {
         return ready().then(function () {
             return new Promise(function (ok, bad) {
                 var win = frame.contentWindow;
@@ -218,18 +220,20 @@ var Bridge = (function () {
                 if (method === "POST") { x.setRequestHeader("content-type", "application/x-www-form-urlencoded"); }
                 x.onload = function () {
                     var t = x.responseText || "";
-                    if (x.status !== 200) { bad(new Error("HTTP " + x.status)); return; }
+                    /* 正文开头一起报：作品列表在签名不对时回 403「Blocked by ArgusSecurityPlugin Sign Invalid」。 */
+                    if (x.status !== 200) { bad(new Error("HTTP " + x.status + (t ? " " + t.slice(0, 50) : ""))); return; }
                     /* 这两种都是 200：「blocked」是签名/环境没过，空正文是缺 cookie 一类 ——
                      * 桌面实测里这两个一直是分开的两种失败，分开报。 */
                     if (t === "blocked") { bad(new Error("blocked")); return; }
-                    if (!t) { bad(new Error("空正文")); return; }
+                    if (!t) { if (quiet) { ok({}); } else { bad(new Error("空正文")); } return; }
                     try { ok(JSON.parse(t)); } catch (e) { bad(new Error("不是 JSON：" + t.slice(0, 30))); }
                 };
                 x.ontimeout = function () { bad(new Error("12 秒无响应")); };
                 x.onerror = function () { bad(new Error("连接失败")); };
                 x.send(method === "POST" ? (body || "") : null);
             });
-        }).then(function (j) { failures = 0; return j; }, function (e) {
+        }).then(function (j) { if (!quiet) { failures = 0; } return j; }, function (e) {
+            if (quiet) { throw e; }
             failures++;
             if (failures >= 3) {
                 Log.report("bridge", "连续 " + failures + " 次失败（最近：" + e.message + "），重建框和签名 SDK");
@@ -258,6 +262,7 @@ var Bridge = (function () {
         reset: reset,
         get: function (path, params) { return request("GET", path, params); },
         post: function (path, params, body) { return request("POST", path, params, body); },
+        report: function (path, body) { return request("POST", path, {}, body, true); },
         plain: plain,
         /* 框（www.douyin.com 源）里脚本看得见的 cookie 的名字 —— 只要名字，不碰值。 */
         cookieNames: function () {

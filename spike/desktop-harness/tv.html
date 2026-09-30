@@ -7,6 +7,16 @@
 // 模拟 widget：页面不在 douyin.com，跨域直连 www.douyin.com（浏览器已关跨域检查），cookie 进引擎自己的 jar。
 function log(s) { console.log('PAGE ' + s); }
 window.onerror = function (m) { log('onerror ' + m); };
+if (location.hash.indexOf('uifid') >= 0) {
+  // 谁写的 UIFID_TEMP：挂钩 document.cookie 的 setter，报调用栈。
+  var cd = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie');
+  Object.defineProperty(document, 'cookie', {configurable: true, get: function () { return cd.get.call(document); }, set: function (v) {
+    if (/uifid/i.test(v)) { log('COOKIE SET ' + v.slice(0, 50) + ' @ ' + String(new Error().stack).split('\n').slice(2, 6).map(function (l) { return l.trim().slice(0, 110); }).join(' | ')); }
+    cd.set.call(document, v);
+  }});
+  var ls = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (k, v) { if (/uifid/i.test(k)) { log('LS SET ' + k + ' @ ' + String(new Error().stack).split('\n').slice(2, 5).map(function (l) { return l.trim().slice(0, 110); }).join(' | ')); } return ls.apply(this, arguments); };
+}
 function load(src) { return new Promise(function (ok, bad) { var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = function () { bad(src); }; document.head.appendChild(s); }); }
 var D = 'https://www.douyin.com';
 var Q = 'device_platform=webapp&aid=6383&channel=channel_pc_web&count=10&refresh_index=1&video_type_select=1&version_code=170400&version_name=17.4.0&pc_client_type=1&cookie_enabled=true&platform=PC';
@@ -17,7 +27,7 @@ function feed(tag) {
     x.open('GET', D + '/aweme/v1/web/tab/feed/?' + Q);
     x.withCredentials = true;
     x.onload = function () {
-      var n = '?', first = ''; try { var j = JSON.parse(x.responseText); n = (j.aweme_list || []).length; first = j.aweme_list && j.aweme_list[0] ? (j.aweme_list[0].desc || '').slice(0, 20) : ''; } catch (e) {}
+      var n = '?', first = ''; try { var j = JSON.parse(x.responseText); n = (j.aweme_list || []).length; if (j.aweme_list && j.aweme_list[0]) { window.__firstId = j.aweme_list[0].aweme_id; } first = j.aweme_list && j.aweme_list[0] ? (j.aweme_list[0].desc || '').slice(0, 20) : ''; } catch (e) {}
       var u = new URL(x.responseURL || D);
       log(tag + ' status=' + x.status + ' len=' + x.responseText.length + ' items=' + n + ' head=' + x.responseText.slice(0, 10) + ' first=' + first + ' | 加上的参数=' + ['a_bogus', 'msToken', 'webid', 'uifid', 'verifyFp', 'fp'].filter(function (k) { return u.searchParams.has(k); }).join(','));
       ok();
@@ -58,7 +68,7 @@ function ttwid() {
       verifyCenter: {interceptPathList: {include: paths, exclude: ['^/aweme/v1/play/', 'douyinvod\\.com']}, commonOptions: {aid: 6383, pageId: 6241}, nocaptchaOptions: {enabled: true}, captchaOptions: {ele: 'captcha_container', showMode: 'mask'}}
     }, {
       verifyCenter: {srcList: ['https://lf-rc1.yhgfb-cn-static.com/obj/rc-verifycenter/sec_sdk_build/4.0.28/captcha/index.js']},
-      bdms: {srcList: ['https://p-pc-weboff.byteimg.com/tos-cn-i-9r5gewecjs/bdms_1.0.1.19_fix.js']}
+      bdms: {srcList: ['https://lf-c-flwb.bytetos.com/obj/rc-client-security/web/stable/1.0.1.19-fix.01/bdms.js', 'https://p-pc-weboff.byteimg.com/tos-cn-i-9r5gewecjs/bdms_1.0.1.19_fix.js']}
     });
     log('glue init called');
   } catch (e) { log('load failed ' + e); }
@@ -67,6 +77,92 @@ function ttwid() {
   if (MODE === 'hist') {
     await new Promise(function (ok) { var x = new XMLHttpRequest(); x.open('GET', D + '/aweme/v1/web/history/read/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&version_code=170400&version_name=17.4.0&cookie_enabled=true&platform=PC&max_cursor=0&count=1'); x.withCredentials = true; x.onload = function () { log('匿名 history/read → ' + x.responseText.slice(0, 120)); ok(); }; x.send(); });
     await new Promise(function (ok) { var x = new XMLHttpRequest(); x.open('GET', D + '/aweme/v1/web/notice/count/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&version_code=170400&version_name=17.4.0&cookie_enabled=true&platform=PC'); x.withCredentials = true; x.onload = function () { log('匿名 notice/count → ' + x.responseText.slice(0, 120)); ok(); }; x.send(); });
+    log('done'); return;
+  }
+  if (MODE === 'stats') {
+    // 播放上报：官网一开始放就 POST /aweme/v2/web/aweme/stats/。看它回什么（桥把空正文当失败）。
+    var f0 = await feed('先拿推荐');
+    var id = window.__firstId;
+    function post(path, body, tag) {
+      return new Promise(function (ok) {
+        var x = new XMLHttpRequest();
+        x.open('POST', D + path + '?' + Q.replace(/&count=10&refresh_index=1&video_type_select=1/, ''));
+        x.withCredentials = true;
+        x.setRequestHeader('content-type', 'application/x-www-form-urlencoded');
+        x.onload = function () { var u = new URL(x.responseURL || D); log(tag + ' status=' + x.status + ' len=' + x.responseText.length + ' body=' + x.responseText.slice(0, 120) + ' | 类型=' + x.getResponseHeader('content-type') + ' | 加上的参数=' + ['a_bogus', 'uifid', 'verifyFp'].filter(function (k) { return u.searchParams.has(k); }).join(',')); ok(); };
+        x.onerror = function () { log(tag + ' XHR error'); ok(); };
+        x.send(body);
+      });
+    }
+    await wait(1500);
+    await post('/aweme/v2/web/aweme/stats/', 'aweme_type=0&item_id=' + id + '&play_delta=1&source=0', 'v2 stats');
+    await wait(1500);
+    await post('/aweme/v2/web/aweme/stats/', 'aweme_type=0&item_id=' + id + '&play_delta=1&source=0', 'v2 stats 第二次');
+    await post('/aweme/v1/web/history/write/', 'aweme_id=' + id + '&author_id=&pre_item_id=&pre_item_seen=0', 'history/write（匿名）');
+    log('done'); return;
+  }
+  if (MODE.indexOf('detail-') === 0) {
+    // 单条视频的播放地址 uri：/aweme/v1/web/aweme/detail/?aweme_id=
+    var id = MODE.slice(7);
+    await feed('先拿 UIFID_TEMP');   // detail 和作品列表一样要 uifid，它是推荐流应答种的 cookie
+    await wait(1500);
+    await new Promise(function (ok) {
+      var x = new XMLHttpRequest();
+      x.open('GET', D + '/aweme/v1/web/aweme/detail/?' + Q.replace(/&count=10&refresh_index=1&video_type_select=1/, '') + '&aweme_id=' + id);
+      x.withCredentials = true;
+      x.onload = function () { if (x.status !== 200) { log('detail body=' + x.responseText.slice(0, 80)); } var j = null; try { j = JSON.parse(x.responseText); } catch (e) {} var v = j && j.aweme_detail && j.aweme_detail.video || {}; log('detail status=' + x.status + ' len=' + x.responseText.length + ' uri=' + (v.play_addr && v.play_addr.uri) + ' ' + v.width + 'x' + v.height + ' dur=' + v.duration + ' create=' + (j && j.aweme_detail && j.aweme_detail.create_time)); ok(); };
+      x.send();
+    });
+    log('done'); return;
+  }
+  if (MODE.indexOf('author') === 0) {
+    // 作者主页要用的两个接口：从推荐流第一条拿作者的 sec_uid，问资料和作品列表（两页）。
+    function api(path, params) {
+      var q = Q.replace(/&count=10&refresh_index=1&video_type_select=1/, '');
+      for (var k in params) { q += '&' + k + '=' + encodeURIComponent(params[k]); }
+      return new Promise(function (ok) {
+        var x = new XMLHttpRequest(); x.open('GET', D + path + '?' + q); x.withCredentials = true;
+        x.onload = function () { var j = null; try { j = JSON.parse(x.responseText); } catch (e) {} log(path + ' status=' + x.status + ' len=' + x.responseText.length + (x.responseText.length < 300 ? ' body=' + x.responseText : '')); ok(j); };
+        x.onerror = function () { log(path + ' XHR error'); ok(null); };
+        x.send();
+      });
+    }
+    var f = await api('/aweme/v1/web/tab/feed/', {count: '10', refresh_index: '1', video_type_select: '1'});
+    var a = f && f.aweme_list && f.aweme_list[0];
+    if (!a) { log('推荐流没拿到'); return; }
+    var au = a.author || {};
+    log('作者字段 ' + Object.keys(au).sort().join(','));
+    log('作者 nickname=' + au.nickname + ' sec_uid=' + (au.sec_uid || '(无)') + ' uid=' + au.uid + ' avatar_thumb=' + !!(au.avatar_thumb && au.avatar_thumb.url_list));
+    var p = await api('/aweme/v1/web/user/profile/other/', {sec_user_id: au.sec_uid, publish_video_strategy_type: '2', personal_center_strategy: '1', profile_other_record_enable: '1', land_to: '1'});
+    if (p) {
+      var u = p.user || {};
+      log('profile status_code=' + p.status_code + ' ' + (p.status_msg || '') + ' | nickname=' + u.nickname + ' 粉丝=' + u.follower_count + ' 获赞=' + u.total_favorited + ' 作品=' + u.aweme_count + ' 关注=' + u.following_count + ' 签名=' + JSON.stringify((u.signature || '').slice(0, 30)) + ' avatar_larger=' + !!(u.avatar_larger && u.avatar_larger.url_list) + ' avatar_300x300=' + !!(u.avatar_300x300 && u.avatar_300x300.url_list));
+      log('profile user 字段 ' + Object.keys(u).sort().join(','));
+    }
+    var cursor = 0;
+    var VAR = (location.hash.split('-')[1] || 'a');
+    var lastTime = 0;
+    for (var pg = 1; pg <= 3; pg++) {
+      var pp = {sec_user_id: au.sec_uid, max_cursor: String(cursor), locate_query: 'false', show_live_replay_strategy: '1', need_time_list: pg === 1 ? '1' : '0', time_list_query: '0', whale_cut_token: '', cut_version: '1', count: '18', publish_video_strategy_type: '2'};
+      if (VAR === 'b') { pp.need_time_list = '0'; }
+      if (VAR === 'c') { pp.need_time_list = '0'; pp.from_user_page = '1'; }
+      if (VAR === 'd' && pg > 1) { pp.max_cursor = String(lastTime * 1000); }
+      if (VAR === 'e') { pp.need_time_list = '0'; pp.from_user_page = '1'; pp.support_h265 = '1'; pp.support_dash = '1'; pp.pc_libra_divert = 'Mac'; }
+      var r = await api('/aweme/v1/web/aweme/post/', pp);
+      if (!r) { break; }
+      var L = r.aweme_list || [];
+      log('post 第' + pg + '页 status_code=' + r.status_code + ' 条数=' + L.length + ' has_more=' + r.has_more + ' max_cursor=' + r.max_cursor + ' min_cursor=' + r.min_cursor);
+      if (pg === 1 && L[0]) { var c0 = (L[0].video || {}).cover || {}; log('  cover.url_list（' + (c0.url_list || []).length + ' 个）' + (c0.url_list || []).map(function (u) { return u.replace(/\?.*/, '?…'); }).join(' | ')); }
+      for (var i = 0; i < Math.min(L.length, 6); i++) {
+        var v = L[i].video || {};
+        var cv = v.cover || {}, oc = v.origin_cover || {};
+        log('  #' + i + ' id=' + L[i].aweme_id + ' top=' + L[i].is_top + ' 图文=' + !!(L[i].images && L[i].images.length) + ' type=' + L[i].aweme_type + ' uri=' + !!(v.play_addr && v.play_addr.uri) + ' ' + v.width + 'x' + v.height + ' dur=' + v.duration + ' cover=' + cv.width + 'x' + cv.height + ' origin=' + oc.width + 'x' + oc.height + ' ♥' + (L[i].statistics || {}).digg_count + ' time=' + L[i].create_time + ' ' + JSON.stringify((L[i].desc || '').slice(0, 16)));
+      }
+      if (L.length) { lastTime = L[L.length - 1].create_time; log('  最后一条 create_time=' + lastTime + ' 置顶数=' + L.filter(function (x) { return x.is_top; }).length); }
+      if (!r.has_more) { break; }
+      cursor = r.max_cursor;
+      await wait(1500);
+    }
     log('done'); return;
   }
   await feed('第1次');

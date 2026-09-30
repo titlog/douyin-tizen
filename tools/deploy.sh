@@ -14,6 +14,9 @@ for a in "$@"; do
     --selftest) SELFTEST=true ;;
     --soak) SELFTEST='"soak"' ;;
     --qr) SELFTEST='"qr"' ;;
+    --author) SELFTEST='"author"' ;;  # 暂停 → 选中作者 → 作者主页 → 放 TA 的作品 → 返回两次（约 1 分钟）
+    --grid) SELFTEST='"grid"' ;;      # 作者主页网格上下翻，同一轮轮换三种做法比掉帧（约 2 分钟）
+    --cold) SELFTEST='"cold"' ;;      # 作者主页里挑一年以前的视频挨个点开，量冷存储多慢（约 5 分钟）
     --ab) SELFTEST='"ab"' ;;      # 同一轮里逐条轮换两种切换动画，连刷 30 条（约 4 分钟）
     --mse) SELFTEST='"mse"' ;;    # MSE 常驻管线探测：换 src 和 seek 到预塞的时间槽，同一轮对比（约 3 分钟）
     --seek) SELFTEST='"seek"' ;;  # 长视频里来回跳到没缓冲的地方，量 seek 多久（约 3 分钟）

@@ -10,7 +10,7 @@
     "use strict";
     if (typeof SELFTEST === "undefined" || !SELFTEST) { return; }
 
-    var KEY = { UP: 38, DOWN: 40, LEFT: 37, RIGHT: 39, ENTER: 13, FF: 417 };
+    var KEY = { UP: 38, DOWN: 40, LEFT: 37, RIGHT: 39, ENTER: 13, FF: 417, RETURN: 10009 };
     var fails = 0, steps = 0;
 
     function key(code) {
@@ -32,6 +32,17 @@
         function poll() {
             var s = st();
             if (s.id && s.id !== prevId && s.shown) { return Promise.resolve(Date.now() - t0); }
+            if (Date.now() - t0 > ms) { return Promise.resolve(-1); }
+            return wait(200).then(poll);
+        }
+        return poll();
+    }
+    /* 等这一条出画面。挑的那条可能正好是进来前看的那条（设备自测撞上过），不能用「换了 id」判。 */
+    function waitId(id, ms) {
+        var t0 = Date.now();
+        function poll() {
+            var s = st();
+            if (s.id === id && s.shown) { return Promise.resolve(Date.now() - t0); }
             if (Date.now() - t0 > ms) { return Promise.resolve(-1); }
             return wait(200).then(poll);
         }
@@ -87,6 +98,93 @@
     }
 
     function tabsShown() { return document.getElementById("tabs").className === "show"; }
+
+    /* 作者主页：暂停 → 下键选中作者 → 确认进主页 → 网格里挑第二条放 → 下键到第三条 → 返回回网格 → 返回回到原来那一条。
+     * **返回键只在作者主页里按** —— 普通视频页上连按两次返回就退出应用了，所以每次按之前先看自己在哪。 */
+    function authorSteps() {
+        var from = st(), fromTab = window.__app.tab();
+        var t0;
+        function inAuthorNow() { return window.__app.inAuthor(); }
+        key(KEY.ENTER);
+        return wait(800).then(function () {
+            key(KEY.DOWN);
+            return wait(500);
+        }).then(function () {
+            var s1 = st();
+            var focused = document.getElementById("author").className === "focus";
+            check("暂停时下键选中作者（不换视频）", focused && s1.paused && s1.id === from.id,
+                  "作者块=" + (focused ? "亮了" : "没亮") + "，暂停=" + s1.paused + "，同一条=" + (s1.id === from.id) + "，提示=" + document.getElementById("hint").textContent);
+            if (!focused) { throw new Error("没选中作者，后面的作者主页步骤不跑了"); }
+            key(KEY.ENTER);
+            t0 = Date.now();
+            function poll() {
+                var a = Author.state();
+                if (a && a.cards > 0 && a.imgs > 0 && (a.stats || Date.now() - t0 > 8000)) { return Promise.resolve(Date.now() - t0); }
+                if (Date.now() - t0 > 20000) { return Promise.resolve(-1); }
+                return wait(300).then(poll);
+            }
+            return poll();
+        }).then(function (ms) {
+            var a = Author.state() || {};
+            /* 看得见的结果：卡片的封面真的解码出来了、头部有数字。 */
+            check("确认进作者主页、出网格", window.__app.view() === "author" && ms >= 0 && !!a.stats,
+                  ms + "ms，@" + a.name + "，" + a.cards + " 张卡片、封面解码 " + a.imgs + "，头像 " + a.avatar + "px，「" + a.stats + "」" + (a.foot ? "，底下「" + a.foot + "」" : ""));
+            if (!a.cards) { throw new Error("网格没出来：" + JSON.stringify(a)); }
+            if (a.cards < 3) { return null; }
+            key(KEY.RIGHT);
+            return wait(400).then(function () {
+                var want = Author.feed().all()[1].id;
+                key(KEY.ENTER);
+                return waitId(want, 15000).then(function (ms2) {
+                    return longestStall(5000).then(function (stall) {
+                        check("网格里挑一条能播", st().id === want && ms2 >= 0 && stall < 3000 && window.__app.view() === "feed",
+                              "出画面 " + ms2 + "ms，是挑的那条=" + (st().id === want) + "，最长停顿 " + stall + "ms");
+                    });
+                });
+            }).then(function () {
+                var want = Author.feed().all()[2].id;
+                key(KEY.DOWN);
+                return waitId(want, 15000).then(function (ms3) {
+                    return longestStall(4000).then(function (stall) {
+                        check("在 TA 的作品里下一条", st().id === want && ms3 >= 0 && stall < 3000,
+                              "出画面 " + ms3 + "ms，是 TA 的第 3 个=" + (st().id === want) + "，最长停顿 " + stall + "ms");
+                    });
+                });
+            });
+        }).then(function () {
+            if (!inAuthorNow() || window.__app.view() !== "feed") { return; }
+            key(KEY.RETURN);
+            return wait(800).then(function () {
+                var a = Author.state() || {};
+                check("返回键回到网格、焦点在刚才那条", window.__app.view() === "author" && a.sel === 2, "视图=" + window.__app.view() + "，焦点 #" + a.sel);
+            });
+        }).then(function () {
+            /* 一直往下翻：快到底了会取下一页。匿名时第二页只回 {"status_code":0}（测试台实测）；登录后给不给，就看这一步。 */
+            if (window.__app.view() !== "author") { return; }
+            var n0 = Author.state().cards, i = 0;
+            function down() {
+                if (i++ >= 5) { return Promise.resolve(); }
+                key(KEY.DOWN);
+                return wait(700).then(down);
+            }
+            return down().then(function () { return wait(4000); }).then(function () {
+                var a = Author.state(), f = Author.feed();
+                var ok = a.cards > n0 || (!f.hasMore() && !(f.gated() && Account.loggedIn()));
+                check("网格往下翻取下一页", ok, "卡片 " + n0 + " → " + a.cards + "，还有更多=" + f.hasMore() + "，第二页只回了 status_code=" + f.gated() +
+                      "，" + (Account.loggedIn() ? "已登录" : "未登录") + "，焦点 #" + a.sel + "，底下「" + a.foot + "」");
+            });
+        }).then(function () {
+            if (window.__app.view() !== "author") { return; }
+            key(KEY.RETURN);
+            return waitShown("", 15000).then(function (ms) {
+                return wait(1500).then(function () { return advance(2500); }).then(function (adv) {
+                    var s2 = st();
+                    check("再按返回回到原来那一条接着放", !inAuthorNow() && window.__app.tab() === fromTab && s2.id === from.id && s2.t >= from.t - 1 && adv > 1.5,
+                          "出画面 " + ms + "ms，标签=" + window.__app.tab() + "，同一条=" + (s2.id === from.id) + "，离开时 " + from.t.toFixed(1) + "s，现在 " + s2.t.toFixed(1) + "s，2.5 秒前进 " + adv.toFixed(1) + "s");
+                });
+            });
+        });
+    }
 
     function switchStep(label, code) {
         var before = st().id;
@@ -221,7 +319,7 @@
                           "同一条=" + (s2.id === recId) + "，离开时 " + recT.toFixed(1) + "s，现在 " + s2.t.toFixed(1) + "s");
                 });
             });
-        }).then(function () {
+        }).then(ensureLong).then(authorSteps).then(function () {
             Log.report("SELFTEST", fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）");
         }, function (e) {
             Log.report("SELFTEST", "中止：" + e.message + "（" + fails + "/" + steps + " 步失败）");
@@ -381,7 +479,169 @@
         }, function (e) { Log.report("SEEK", "中止：" + e.message); });
     }
 
-    var MODES = {soak: soak, qr: qrOnly, ab: ab, seek: seekRun};
+    /* --author：启动后直接走作者主页那几步，1 分钟出结果。 */
+    function authorOnly() {
+        return waitShown("", 40000).then(function () { return wait(3000); }).then(ensureLong).then(authorSteps).then(function () {
+            Log.report("SELFTEST", fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）");
+        }, function (e) {
+            Log.report("SELFTEST", "中止：" + e.message + "（" + fails + "/" + steps + " 步失败）");
+        });
+    }
+
+    /* --grid：作者主页网格上下翻，同一轮里轮换三种做法（js/author.js 的 MODES），比按键后 450ms 里的帧间隔、掉帧。
+     * 先热身一趟（登录态下会取第二页、封面都到齐），之后只在前 5 行里上下翻，不再触发取页。约 2 分钟。 */
+    function gridRun() {
+        var ARMS = ["旧", "层", "层+瞬"], ROUNDS = 9;
+        function keys(code, n) {
+            var i = 0;
+            function go() { if (i++ >= n) { return Promise.resolve(); } key(code); return wait(700).then(go); }
+            return go();
+        }
+        function waitImgs(min, ms) {
+            var t0 = Date.now();
+            function poll() {
+                var a = Author.state();
+                if (a && a.cards >= min && a.imgs >= a.cards) { return Promise.resolve(true); }
+                if (Date.now() - t0 > ms) { return Promise.resolve(false); }
+                return wait(300).then(poll);
+            }
+            return poll();
+        }
+        function sum(a) { return a.reduce(function (x, y) { return x + y; }, 0); }
+        return waitShown("", 40000).then(function () { return wait(3000); }).then(ensureLong).then(function () {
+            key(KEY.ENTER);
+            return wait(800);
+        }).then(function () {
+            key(KEY.DOWN);
+            return wait(500);
+        }).then(function () {
+            key(KEY.ENTER);
+            return waitImgs(17, 20000);
+        }).then(function (ok) {
+            if (!ok) { throw new Error("网格不到 5 行或封面没到齐：" + JSON.stringify(Author.state())); }
+            return keys(KEY.DOWN, 6).then(function () { return keys(KEY.UP, 6); }).then(function () { return waitImgs(17, 10000); });
+        }).then(function () {
+            Author.probes().length = 0;
+            var r = 0;
+            function round() {
+                if (r >= ROUNDS) { return Promise.resolve(); }
+                Author.setMode(ARMS[r++ % ARMS.length]);
+                return keys(KEY.DOWN, 4).then(function () { return keys(KEY.UP, 4); }).then(round);
+            }
+            return round();
+        }).then(function () {
+            var ps = Author.probes();
+            ARMS.forEach(function (m) {
+                var g = ps.filter(function (p) { return p.mode === m && p.scrolled; });
+                Log.report("GRID", m + "：滚动 " + g.length + " 次，最长帧间隔 中位 " + median(g.map(function (p) { return p.maxGap; })) +
+                           "ms，掉帧 共 " + sum(g.map(function (p) { return p.drops; })) + "（有掉帧的 " + g.filter(function (p) { return p.drops; }).length +
+                           " 次），按键→第一帧 中位 " + median(g.map(function (p) { return p.first; })) + "ms，长任务 共 " + sum(g.map(function (p) { return p.long; })) +
+                           "ms | 最长间隔 全部=" + g.map(function (p) { return p.maxGap; }).join(","));
+            });
+            Author.setMode("层+瞬");
+            if (window.__app.view() === "author") { key(KEY.RETURN); }
+            Log.report("GRID", "结束");
+        }, function (e) { Log.report("GRID", "中止：" + e.message); });
+    }
+
+    /* --cold：老视频走冷存储（v*-colds.douyinvod.com）—— 是不是第一次取很慢、会被 12 秒看门狗跳掉（2026-09-30 的怀疑）。
+     * 在作者主页里往下翻到一年以前的视频，挨个点开量：出画面用了多久、第一段首字节 / 用时 / 主机（「mse: 备好」那行）。
+     * 设备实测 8 条（408–498 天前）全走 colds，首字节 0.6–1.5 秒，出画面中位 1.8 秒、最慢 3.4 秒 —— 不慢，怀疑不成立。
+     * **每条只能量一次**：取过一次 CDN 边缘就热了。挑的条目隔 3 个、从旧往新挑 —— 放一条时会预热它后面两条，
+     * 别让预热把下一条焐热；每条之后等所有请求停了再点下一条，别抢链路。
+     * 看门狗照正式版的规则（字节在来不算卡、60 秒上限），判的是「修好了没有」：旧规则下 >12 秒的都会被跳掉。 */
+    function coldRun() {
+        var OLD_DAYS = 365, WANT = 8, AUTHORS = 4;
+        var res = [], tried = 0;
+        function keys(code, n) {
+            var i = 0;
+            function go() { if (i++ >= n) { return Promise.resolve(); } key(code); return wait(600).then(go); }
+            return go();
+        }
+        function old(it) { return it.time && Date.now() / 1000 - it.time > OLD_DAYS * 86400 && !it.top; }
+        function quiet(ms) {
+            var t0 = Date.now();
+            function poll() { if (!Mse.busy() || Date.now() - t0 > ms) { return Promise.resolve(); } return wait(500).then(poll); }
+            return poll();
+        }
+        /* 从现在这条的作者进主页，往下翻到够 WANT 条老视频或者翻不动。回挑出来的下标（从旧往新、隔 3 个）。 */
+        function findOld() {
+            tried++;
+            key(KEY.ENTER);
+            return wait(800).then(function () { key(KEY.DOWN); return wait(500); }).then(function () {
+                key(KEY.ENTER);
+                return wait(4000);
+            }).then(function () {
+                var presses = 0;
+                function page() {
+                    var f = Author.feed();
+                    if (!f) { return Promise.resolve(); }
+                    var n = f.all().filter(old).length;
+                    if (n >= WANT * 3 || (!f.hasMore() && presses > 0) || presses >= 60) { return Promise.resolve(); }
+                    presses += 6;
+                    return keys(KEY.DOWN, 6).then(function () { return wait(1500); }).then(page);
+                }
+                return page();
+            }).then(function () {
+                var all = Author.feed() ? Author.feed().all() : [];
+                var idx = [];
+                for (var i = all.length - 1; i >= 0 && idx.length < WANT; i--) {
+                    if (old(all[i]) && (!idx.length || idx[idx.length - 1] - i >= 3)) { idx.push(i); }
+                }
+                Log.report("COLD", "@" + Author.name() + " 翻到 " + all.length + " 条，一年以前的 " + all.filter(old).length + " 条，挑 " + idx.length + " 条");
+                return idx;
+            });
+        }
+        function one(i) {
+            var it = Author.feed().all()[i];
+            var days = Math.floor((Date.now() / 1000 - it.time) / 86400);
+            return quiet(30000).then(function () {
+                Author.select(i);
+                key(KEY.ENTER);
+                var t0 = Date.now();
+                function poll() {
+                    var s = st();
+                    if (s.id === it.id && s.shown) { return Promise.resolve(Date.now() - t0); }
+                    if (s.id && s.id !== it.id) { return Promise.resolve(-2); }       // 被判放不了、跳到了别的
+                    if (Date.now() - t0 > 75000) { return Promise.resolve(-1); }
+                    return wait(250).then(poll);
+                }
+                return poll();
+            }).then(function (ms) {
+                var r = {i: i, days: days, ms: ms};
+                res.push(r);
+                Log.report("COLD", "#" + i + " 发布 " + days + " 天前 " + (ms >= 0 ? "出画面 " + ms + "ms" : ms === -2 ? "被跳过" : "75 秒没出画面") +
+                           " | " + Mse.pending(it));
+                return (ms >= 0 ? longestStall(4000) : Promise.resolve(-1)).then(function (stall) {
+                    r.stall = stall;
+                    if (window.__app.inAuthor() && window.__app.view() === "feed") { key(KEY.RETURN); }
+                    return wait(1000);
+                });
+            });
+        }
+        function author() {
+            return findOld().then(function (idx) {
+                var k = 0;
+                function next() { if (k >= idx.length) { return Promise.resolve(); } return one(idx[k++]).then(next); }
+                return next();
+            }).then(function () {
+                if (window.__app.view() === "author") { key(KEY.RETURN); }
+                if (res.length >= WANT || tried >= AUTHORS) { return; }
+                /* 这位作者老视频不够：回推荐换下一条的作者。 */
+                return wait(3000).then(function () { var before = st().id; key(KEY.DOWN); return waitShown(before, 15000); })
+                    .then(function () { return wait(2000); }).then(author);
+            });
+        }
+        return waitShown("", 40000).then(function () { return wait(3000); }).then(ensureLong).then(author).then(function () {
+            var ok = res.filter(function (r) { return r.ms >= 0; });
+            var ms = ok.map(function (r) { return r.ms; });
+            Log.report("COLD", "结束：" + res.length + " 条一年以前的视频，出画面 " + ok.length + " 条，中位 " + median(ms) + "ms 最慢 " + (ms.length ? Math.max.apply(null, ms) : -1) +
+                       "ms，超过 12 秒的 " + ms.filter(function (x) { return x > 12000; }).length + " 条（旧看门狗下会被跳过）| 全部=" +
+                       res.map(function (r) { return r.days + "天:" + (r.ms >= 0 ? r.ms : r.ms === -2 ? "跳过" : "超时"); }).join(","));
+        }, function (e) { Log.report("COLD", "中止：" + e.message); });
+    }
+
+    var MODES = {soak: soak, qr: qrOnly, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun};
     if (SELFTEST === "mse") { return; }                 // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();

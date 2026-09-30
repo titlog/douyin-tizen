@@ -43,6 +43,8 @@ var Player = (function () {
     var playNote = "";         // 调用方附在「到画面」那行里的说明
     var pendingSeek = 0;       // 元数据到了再跳：切回标签时接着看
     var lastTime = -1, stuckSince = 0;
+    var lastBytes = -1, srcProgress = 0;   // 看门狗：等数据时这一条收到的字节（MSE）/ progress 事件数（src）
+    var STALL_MS = 12000, FIRST_CAP = 60000;
     var paused = false;
     var warm = {};             // item.id → {state: "在途"|"好了"|"失败", url, ms, bytes}
 
@@ -104,6 +106,7 @@ var Player = (function () {
             el.addEventListener(name, function () { if (!told && !marks[name]) { marks[name] = Date.now() - switchAt; } });
         });
         el.addEventListener("playing", function () { shown(); });
+        el.addEventListener("progress", function () { srcProgress++; });
     }
 
     /* 这一条出画面了（playing，或 MSE 下播放头已经在新槽里走起来）。 */
@@ -241,23 +244,43 @@ var Player = (function () {
         fellBack = false;
         paused = false;
         lastTime = -1;
+        lastBytes = -1;
+        srcProgress = 0;
         stuckSince = Date.now();
         if (useMse(it)) { playMse(it, startAt); } else { playSrc(it, startAt); }
     }
 
+    /* 播放头前面还有几秒缓冲（MSE 下只算这一条的槽里、播放头所在的那一段）。 */
+    function ahead() {
+        try {
+            if (engine === "mse") { return Mse.aheadEnd() - el.currentTime; }
+            for (var i = 0; i < el.buffered.length; i++) {
+                if (el.buffered.start(i) <= el.currentTime && el.currentTime <= el.buffered.end(i)) { return el.buffered.end(i) - el.currentTime; }
+            }
+        } catch (e) {}
+        return 0;
+    }
+
     /* 卡死看门狗：心跳驱动，不靠 waiting 事件 —— bilibili 那边两次栽在「事件只发一次、
-     * 正好被吞」上。播放头 12 秒不动且没暂停，就当这一条放不了。 */
+     * 正好被吞」上。播放头 12 秒不动且没暂停，就当这一条放不了。
+     * **在等数据、字节还在来，不算卡**（2026-09-30）：作者主页里一条视频 12 秒没出画面被跳过 —— 第一段请求还在途。那一分钟
+     * 网络整体慢（同一分钟推荐流一次 6.2 秒，平时 1.5–2.8）。还没出画面、或者前方缓冲不到 2 秒时，这一条收到了新字节就算有进展；
+     * 字节也停了 STALL_MS 才算卡。解码器卡死（字节都在、前方缓冲几十秒、readyState=1）照旧 12 秒判掉：那时不在等数据。
+     * 另设上限：切过来 FIRST_CAP 还没出画面就放弃，别让一条永远转圈。 */
     setInterval(function () {
         if (!item || paused) { stuckSince = 0; return; }
         if (el.currentTime !== lastTime) { lastTime = el.currentTime; stuckSince = Date.now(); return; }
+        var waiting = !told || ahead() < 2;
+        var bytes = !waiting ? -1 : engine === "mse" || useMse(item) ? Mse.fetched(item) : srcProgress;
+        if (waiting && bytes !== lastBytes) { lastBytes = bytes; stuckSince = Date.now(); }
         if (!stuckSince) { stuckSince = Date.now(); return; }
-        if (Date.now() - stuckSince > 12000) {
+        var capped = !told && Date.now() - switchAt > FIRST_CAP;
+        if (Date.now() - stuckSince > STALL_MS || capped) {
             stuckSince = 0;
-            var ahead = 0;
-            try { ahead = el.buffered.length ? el.buffered.end(el.buffered.length - 1) - el.currentTime : 0; } catch (e) {}
-            Log.report("卡住", "12 秒没进展 t=" + el.currentTime.toFixed(1) + " readyState=" + el.readyState +
-                       " 前方缓冲=" + ahead.toFixed(1) + "s networkState=" + el.networkState);
-            if (handlers.error) { handlers.error("卡住 12 秒"); }
+            var why = capped ? "切过来 " + Math.round(FIRST_CAP / 1000) + " 秒还没出画面" : Math.round(STALL_MS / 1000) + " 秒没进展" + (waiting ? "（字节也停了）" : "");
+            Log.report("卡住", why + " t=" + el.currentTime.toFixed(1) + " readyState=" + el.readyState +
+                       " 前方缓冲=" + ahead().toFixed(1) + "s networkState=" + el.networkState + (useMse(item) ? " | " + Mse.pending(item) : ""));
+            if (handlers.error) { handlers.error(capped ? "太慢" : "卡住"); }
         }
     }, 1000);
 

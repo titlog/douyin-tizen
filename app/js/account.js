@@ -17,6 +17,9 @@ var Account = (function () {
     "use strict";
 
     var state = {known: false, loggedIn: false};
+    /* 第一次查清楚登录态时兑现。启动时第一条视频比登录态先到（有缓存时签名桥在第一帧之后才起），它的观看历史要等这个。 */
+    var markKnown;
+    var knownP = new Promise(function (r) { markKnown = r; });
 
     /* 判据：观看历史（history/read）的 status_code。未登录时它回 8 +「用户未登录」，语义就是
      * 我们要的那个布尔值。notice/count 同时问一次当对照，cookie 名字也照旧列出来 —— 每一样
@@ -32,6 +35,7 @@ var Account = (function () {
             var h = r[0], n = r[1];
             var names = Bridge.cookieNames();
             state = {known: true, loggedIn: h.status_code === 0};
+            markKnown();
             Log.report("account", why + " → history/read status_code=" + h.status_code + " " + (h.status_msg || "") +
                        " | notice/count status_code=" + n.status_code + " " + (n.status_msg || "") +
                        " → 判为" + (state.loggedIn ? "已登录" : "未登录") +
@@ -41,6 +45,7 @@ var Account = (function () {
             /* 也算「已知」—— 不然等登录态的标签会一直等下去。 */
             Log.report("account", why + " → 签名桥没起来（" + e.message + "），按" + (state.loggedIn ? "已登录" : "未登录") + "处理");
             state = {known: true, loggedIn: state.loggedIn};
+            markKnown();
             return state;
         });
     }
@@ -66,6 +71,7 @@ var Account = (function () {
         check: check,
         logout: logout,
         loggedIn: function () { return state.loggedIn; },
+        whenKnown: function () { return knownP; },
         known: function () { return state.known; }
     };
 })();

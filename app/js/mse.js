@@ -30,6 +30,9 @@ var Mse = (function () {
     var FIRST = 1048576;           // 第一段：读出 moov 在哪；moov 小的话 moov 和开头几秒都在里面了
     var HEAD = 1572864;            // 预热：moov 之后取这么多（1080p 大约 4–8 秒）
     var HEAD_NOW = 524288;         // 现取（没预热过就要放）：先要够出画面的，剩下的边放边取
+    /* 一个请求多久没收到新字节就算失败。原来是「整个请求 20 秒没取完」：网慢的时候，慢但字节一直在来的请求也会被掐掉
+     * （2026-09-30）。整个请求另有 TOTAL_MS 的上限。 */
+    var IDLE_MS = 15000, TOTAL_MS = 120000;
     var CHUNK = 2097152;
     var AHEAD = 30, BEHIND = 20, KEEP_HEAD = 8;
 
@@ -91,12 +94,23 @@ var Mse = (function () {
             var x = e.xhr = new XMLHttpRequest();
             e.xhrAt = Date.now();
             e.xhrWant = to - from + 1;
+            e.xhrGot = 0;
+            e.xhrHost = "";
+            e.xhrTtfb = -1;
+            var idle = 0, idled = false;
+            var arm = function () {
+                clearTimeout(idle);
+                idle = setTimeout(function () { idled = true; try { x.abort(); } catch (z) {} }, IDLE_MS);
+            };
+            var done = function () { clearTimeout(idle); e.lastGet = {ttfb: e.xhrTtfb, ms: Date.now() - e.xhrAt, host: e.xhrHost}; };
             x.open("GET", url);
             x.responseType = "arraybuffer";
-            x.timeout = 20000;
+            x.timeout = TOTAL_MS;
             x.setRequestHeader("Range", "bytes=" + from + "-" + to);
             x.onload = function () {
                 e.xhr = null;
+                if (!e.xhrHost && x.responseURL) { e.xhrHost = x.responseURL.split("/")[2]; }
+                done();
                 var n = x.response ? x.response.byteLength : 0;
                 var cr = CONTENT_RANGE.exec(x.getResponseHeader("Content-Range") || "");
                 if (x.status === 206 && n && cr && +cr[1] === from && n === +cr[2] - from + 1) {
@@ -117,9 +131,24 @@ var Mse = (function () {
                 }
                 fail(new Error(x.status === 206 ? "回来的字节对不上（" + (x.response ? x.response.byteLength : 0) + "B，" + (cr ? cr[0] : "无 Content-Range") + "）" : "HTTP " + x.status));
             };
-            x.onerror = function () { e.xhr = null; fail(new Error("连接失败")); };
-            x.ontimeout = function () { e.xhr = null; fail(new Error("20 秒没回完")); };
-            x.onabort = function () { e.xhr = null; var err = new Error("取消"); err.aborted = true; fail(err); };
+            /* 「卡住」那行用：字节还在来，还是一个都没到。 */
+            x.onprogress = function (ev) {
+                if (ev.loaded > e.xhrGot) { arm(); }
+                if (e.xhrTtfb < 0 && ev.loaded > 0) { e.xhrTtfb = Date.now() - e.xhrAt; }
+                e.xhrGot = ev.loaded;
+                if (!e.xhrHost && x.responseURL) { e.xhrHost = x.responseURL.split("/")[2]; }
+            };
+            x.onerror = function () { e.xhr = null; done(); fail(new Error("连接失败")); };
+            x.ontimeout = function () { e.xhr = null; done(); fail(new Error(TOTAL_MS / 1000 + " 秒没回完（收到 " + mb(e.xhrGot) + "/" + mb(e.xhrWant) + "）")); };
+            x.onabort = function () {
+                e.xhr = null;
+                done();
+                if (idled) { fail(new Error(IDLE_MS / 1000 + " 秒没收到新字节（收到 " + mb(e.xhrGot) + "/" + mb(e.xhrWant) + (e.xhrHost ? "，" + e.xhrHost : "，一直没有响应") + "）")); return; }
+                var err = new Error("取消");
+                err.aborted = true;
+                fail(err);
+            };
+            arm();
             x.send();
         });
     }
@@ -376,6 +405,7 @@ var Mse = (function () {
         e.ready = open().then(function () {
             return get(e, item.url, 0, FIRST - 1);
         }).then(function (r) {
+            e.firstGet = e.lastGet;
             e.url = r.url;
             e.size = r.total || fileEnd(r.buf);
             if (!e.size) { throw unusable("不知道文件多长（没有 Content-Range，开头也找不到 mdat）"); }
@@ -403,7 +433,9 @@ var Mse = (function () {
         }).then(function () {
             e.prepMs = Date.now() - e.t0;
             R("备好 槽" + e.slot + " " + e.vw + "x" + e.vh + " " + Math.round(e.dur) + "s " + e.codec + " | moov " + mb(e.moov) + "，取 " + mb(e.next) +
-              "，转封装 " + e.remuxMs + "ms，共 " + e.prepMs + "ms" + (e.now ? "（现取）" : "") + " | " + gopStat(keysOf(e)) + " | 槽里 " + slotRanges(e) +
+              "，转封装 " + e.remuxMs + "ms，共 " + e.prepMs + "ms" + (e.now ? "（现取）" : "") +
+              (e.firstGet ? "，第一段 首字节 " + e.firstGet.ttfb + "ms 共 " + e.firstGet.ms + "ms " + e.firstGet.host : "") +
+              " | " + gopStat(keysOf(e)) + " | 槽里 " + slotRanges(e) +
               (e.replays ? "，重放 " + e.replays + " 次 " + mb(e.replayBytes) : "") + " | " + item.desc.slice(0, 12));
             return e;
         });
@@ -584,6 +616,26 @@ var Mse = (function () {
         whyBad: function (item) { return bad[item.id] || ""; },
         attached: function () { return !!ms; },
         /* "槽里有" / "在途" / "" —— 「到画面」那行用。 */
+        /* 这一条到现在收到的字节（播放器看门狗用：等数据的时候字节还在来就不算卡）。 */
+        fetched: function (item) {
+            var e = items[item.id];
+            return e ? e.next + (e.xhr ? e.xhrGot || 0 : 0) : 0;
+        },
+        /* 自测 --cold：有几条在取（等链路空了再点下一条）。 */
+        busy: function () {
+            var n = 0;
+            for (var k in items) { if (items.hasOwnProperty(k) && items[k].xhr) { n++; } }
+            return n;
+        },
+        /* 播放器看门狗报「卡住」时附上：这一条在 MSE 里走到哪了。2026-09-30 作者主页里一条视频 12 秒没出画面被跳过，
+         * MSE 一个字没报 —— 第一段请求（那时 20 秒超时）还在途。 */
+        pending: function (item) {
+            var e = items[item.id];
+            if (!e) { return "MSE 里没有这一条"; }
+            if (e.info && !e.pending) { return "已备好（槽" + e.slot + "）"; }
+            return (e.info ? "开头已转好、还在 append" : "还没拿到 moov") + "，" + (e.xhr ? "请求在途 " + ((Date.now() - e.xhrAt) / 1000).toFixed(1) + "s，收到 " +
+                   mb(e.xhrGot || 0) + "/" + mb(e.xhrWant) + (e.xhrHost ? "，" + e.xhrHost : "，还没有响应") : "没有请求在途") + "，已取 " + mb(e.next);
+        },
         status: function (item) {
             var e = items[item.id];
             if (!e) { return ""; }

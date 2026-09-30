@@ -8,7 +8,8 @@ const browser = await chromium.launch({executablePath: exe, headless: !process.e
 const ctx = await browser.newContext(UA ? {userAgent: UA} : {});
 const page = await ctx.newPage();
 page.on('console', m => { if (m.text().startsWith('PAGE')) console.log(m.text()); });
-page.on('request', q => { if (q.url().includes('/tab/feed/')) console.log('REFERER', q.headers()['referer'] || '(无)'); });
+page.on('request', q => { if (q.url().includes('/tab/feed/')) console.log('REFERER', q.headers()['referer'] || '(无)'); if (process.env.PARAMS && /\/aweme\/v[12]\/web\//.test(q.url())) { const u = new URL(q.url()), p = u.searchParams; console.log('REQ', u.pathname, ['a_bogus', 'webid', 'uifid', 'verifyFp', 'msToken'].map(k => k + (p.has(k) ? '=' + (p.get(k) || '(空)').slice(0, 12) : '✗')).join(' ')); } });
+page.on('response', async r => { if (process.env.PARAMS) { const sc = (await r.allHeaders().catch(() => ({})))['set-cookie'] || ''; if (/uifid/i.test(sc)) console.log('SETCOOKIE', new URL(r.url()).host + new URL(r.url()).pathname, sc.replace(/=[0-9a-f]{40,}/g, '=<hex>')); } });
 page.on('response', r => { const u = new URL(r.url()); if (/douyin\.com|bytedance|zijieapi|mssdk|byteimg|bytetos|yhgfb/.test(u.host) && true) console.log('NET', r.status(), u.host + u.pathname); });
 console.log('UA', await page.evaluate(() => navigator.userAgent).catch(() => '?'));
 import fs from 'node:fs';

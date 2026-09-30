@@ -8,6 +8,7 @@
  *   左右键 → 切标签（暂停时改为快退 / 快进 10 秒）
  *   快进 / 快退键 → 任何时候都快进 / 快退 10 秒
  *   确认 / 播放暂停键 → 暂停；在「我」页上是退出登录（按两次）
+ *   暂停时下键 → 选中作者，再按确认 → 作者主页（js/author.js）；返回键一层层退回来
  *   返回键按两次 → 退出
  * 竖屏视频居中、两侧垫一层模糊的封面；横屏视频铺满。
  */
@@ -40,7 +41,14 @@
     var backAt = 0;
     var logoutAt = 0;
     var loginFor = "";        // 登录是从哪个标签发起的，成功后回到那里
+    var inAuthor = false;     // 在作者主页里：看网格（view "author"）或者在放 TA 的作品（view "feed"，feed() 是 TA 的）
+    var authorFocus = false;  // 暂停时下键选中了作者
+    var authorResume = null;  // 从 TA 的作品回到网格时那一条放到了哪（{id, t}），再点它接着放
     var switchInfo = null;    // 这一次切换：封面图什么时候到、比例多少（「封面」那行日志用）
+    var playedId = "";        // 上一次上报「开始放」的是哪一条（从「我」、作者主页回来接着放同一条不再报）
+    var watching = {id: "", frac: 0};   // 正在放的这条看到了百分之几（下一条上报时是 pre_item_seen）
+    var slowTimer = 0;        // 切过来 SLOW_MS 还没出画面就转圈（网慢时第一段能取十几秒）
+    var SLOW_MS = 2500;
     /* 预热方式。"blob"（整段下进内存）在 2026-09-29 的对照里只快一两百毫秒、而且多数视频
      * 32–216MB 太大用不上，见 CLAUDE.md；代码留着，默认用 "range"。 */
     var PRELOAD_MODE = "range";
@@ -72,7 +80,11 @@
         resumeAt = {};
         for (var i = 0; i < TABS.length; i++) { if (TABS[i].feed) { feeds[TABS[i].key] = Feed.create(TABS[i].key); } }
     }
-    function feed() { return feeds[TABS[tab].key]; }
+    function feed() { return inAuthor ? Author.feed() : feeds[TABS[tab].key]; }
+    function where() { return inAuthor ? "作者" : TABS[tab].name; }     // 「到画面」那行里的出处
+
+    /* 「播放」那行里报视频有多老。老视频走冷存储（v*-colds.douyinvod.com），但实测不慢（CLAUDE.md），报出来备查。 */
+    function age(item) { return item.time ? " 发布 " + Math.floor((Date.now() / 1000 - item.time) / 86400) + " 天前" : ""; }
 
     function toast(msg, ms) {
         var t = $("toast");
@@ -86,7 +98,7 @@
      * 时候顶部冒出导航是打扰（2026-09-29 用户反馈）。暂停期间和非视频页上标签栏常驻。 */
     function showInfo(withTabs) {
         $("info").className = view === "feed" ? "show" : "";
-        $("tabs").className = withTabs || view !== "feed" || Player.isPaused() ? "show" : "";
+        $("tabs").className = view !== "author" && (withTabs || view !== "feed" || Player.isPaused()) ? "show" : "";
         clearTimeout(infoTimer);
         infoTimer = setTimeout(function () {
             if (view === "feed" && !Player.isPaused()) { $("info").className = ""; $("tabs").className = ""; }
@@ -94,6 +106,12 @@
     }
 
     function markTabs() {
+        /* 在放作者的作品：没有标签可切，顶上写是谁的作品、怎么回去。 */
+        if (inAuthor) {
+            $("tabs").innerHTML = "<span class=\"tab on\"></span><span class=\"tab-hint\">返回键回到 TA 的主页</span>";
+            $("tabs").firstChild.textContent = "@" + Author.name() + " 的作品";
+            return;
+        }
         var html = "";
         for (var i = 0; i < TABS.length; i++) {
             html += "<span class=\"tab" + (i === tab ? " on" : "") + "\">" + TABS[i].name + "</span>";
@@ -101,11 +119,28 @@
         $("tabs").innerHTML = html;
     }
 
+    /* 暂停时下键选中作者：名字亮成一块，下面一行说确认键去哪。提示只在暂停时有 —— 播放时下键是下一条。 */
+    function focusAuthor(on) {
+        authorFocus = on;
+        $("author").className = on ? "focus" : "";
+        hint();
+    }
+    function hint() {
+        var it = view === "feed" && feed() ? feed().current() : null;
+        var h = "";
+        if (it && it.secUid && Player.isPaused()) {
+            h = !authorFocus ? "下键选中作者" : (inAuthor ? "确认键回到 TA 的主页" : "确认键进入 TA 的主页") + " · 上键取消";
+        }
+        $("hint").textContent = h;
+    }
+
     function setView(v) {
         view = v;
         $("login").className = v === "login" ? "show" : "";
         $("me").className = v === "me" ? "show" : "";
         $("empty").className = v === "empty" ? "show" : "";
+        $("author-page").className = v === "author" ? "show" : "";
+        focusAuthor(false);
         if (v !== "feed") {
             $("cover").className = "";
             clearTimeout(pushTimer);
@@ -149,9 +184,14 @@
      * 「封面」那行日志报图用了多久、封面比例和视频比例。 */
     function render(item, dir, push) {
         $("author").textContent = item.author ? "@" + item.author : "";
+        focusAuthor(false);
+        $("hint").textContent = "";
         $("desc").textContent = item.desc;
         $("stats").textContent = "♥ " + count(item.likes) + "   💬 " + count(item.comments);
         var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false, playingAt: 0, push: push};
+        $("loading").className = "";
+        clearTimeout(slowTimer);
+        slowTimer = setTimeout(function () { if (switchInfo === sw && !sw.playing && view === "feed") { $("loading").className = "show"; } }, SLOW_MS);
         /* 推的时候旧画面还在，黑幕不能先盖上去 —— "cover"/"video" 在换源那一刻（show 里）再盖；
          * "early" 不用黑幕：滑进来的是一整屏黑底 + 封面，滑到位就把旧画面全盖住了。 */
         if (!push) { $("mask").className = "over"; }
@@ -229,7 +269,7 @@
         if (!keepSliding) { resetSlide(v); }
         render(item, dir, push);
         if (!push || push === "early") {
-            Player.play(item, TABS[tab].name + (push ? "·推(early)" : ""), startAt);
+            Player.play(item, where() + (push ? "·推(early)" : ""), startAt);
             return;
         }
         if (push === "video" && !keepSliding) { slideOut(v, dir); }
@@ -238,7 +278,7 @@
             /* "cover" 推上来的是整页黑底，已经盖满，不用黑幕。 */
             if (push !== "cover") { $("mask").className = "over"; }
             resetSlide(v);
-            Player.play(item, TABS[tab].name + "·推(" + push + ")", startAt);
+            Player.play(item, where() + "·推(" + push + ")", startAt);
         }, push === "cover" ? COVER_SEEK_MS : 250);
     }
 
@@ -276,17 +316,21 @@
         if (!f.peekNext()) { $("loading").className = "show"; }
         f.next().then(function (item) {
             busy = false;
-            if (tab !== myTab || view !== "feed") { return; }   // 等的时候观众切走了
+            if (tab !== myTab || view !== "feed" || feed() !== f) { return; }   // 等的时候观众切走了（或进出了作者主页）
             $("loading").className = "";
             Log.report("播放", f.name + " #" + f.position() + " " + cause + " " + item.id + " " + (item.author || "") + " " +
-                       item.desc.slice(0, 20) + " " + item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s");
+                       item.desc.slice(0, 20) + " " + item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s" + age(item));
             show(item, 0, cause === "下键" || cause === "播完" ? "up" : "");
         }, function (e) {
             busy = false;
-            if (tab !== myTab || view !== "feed") { return; }
+            if (tab !== myTab || view !== "feed" || feed() !== f) { return; }
             $("loading").className = "";
             Log.report("feed", f.name + " 取不到下一条：" + e.message);
-            if (f.isEmpty()) {
+            if (e.message === "没有更多了") {
+                /* 自己放完了最后一条：停在这儿。不停的话 MSE 的播放头停在槽尾，12 秒后看门狗当成卡住。按键的只提示。 */
+                if (cause === "播完" && !Player.isPaused()) { togglePause(); }
+                toast(inAuthor ? "这是 TA 的最后一个作品" + (f.gated() && !Account.loggedIn() ? "（登录后能看更多）" : "") : f.name + "没有更多了", 3000);
+            } else if (f.isEmpty()) {
                 $("empty-msg").textContent = f.kind === "follow" ? "你关注的人最近没有新视频" : "这里暂时没有内容（" + e.message + "）";
                 Player.stop();
                 setView("empty");
@@ -301,6 +345,62 @@
         if (!item) { toast("已经是第一条了"); return; }
         Log.report("播放", feed().name + " #" + feed().position() + " 上一条 " + item.id);
         show(item, 0, "down");
+    }
+
+    function togglePause() {
+        var p = Player.toggle();
+        $("paused").className = p ? "show" : "";
+        $("progress").className = p ? "show" : "";
+        showInfo(p);
+        focusAuthor(false);
+    }
+
+    // ---------- 作者主页 ----------
+
+    function openAuthor() {
+        if (inAuthor) { backToGrid(); return; }          // 放的本来就是 TA 的作品
+        var it = feed().current();
+        if (!it || !it.secUid) { toast("这一条缺作者信息，换一条再试"); return; }
+        var st = Player.state();
+        if (st.id && st.shown) { resumeAt[TABS[tab].key] = st.t; }
+        Log.report("作者", "进入 @" + it.author + "（从" + TABS[tab].name + " " + it.id + " " + (st.t || 0).toFixed(1) + "s）");
+        Player.stop();
+        inAuthor = true;
+        authorResume = null;
+        setView("author");
+        $("tabs").className = "";
+        Author.open(it);
+    }
+
+    /* 网格上按确认：从这一条开始放 TA 的作品。刚才放过、退回网格的那一条接着放。 */
+    function playFromGrid() {
+        var i = Author.selected();
+        if (i < 0) { Author.retry(); return; }
+        var f = Author.feed();
+        var it = f.jump(i);
+        var at = authorResume && authorResume.id === it.id ? authorResume.t : 0;
+        Log.report("播放", "作者 #" + i + " 网格点选 " + it.id + " " + it.desc.slice(0, 20) + " " + it.w + "x" + it.h + " " + Math.round(it.dur / 1000) + "s" + age(it) + (at ? " 接着 " + at.toFixed(1) + "s" : ""));
+        setView("feed");
+        markTabs();
+        show(it, at, "");
+    }
+
+    function backToGrid() {
+        var st = Player.state();
+        authorResume = st.id && st.shown ? {id: st.id, t: st.t} : null;
+        Player.stop();
+        busy = false;
+        setView("author");
+        $("tabs").className = "";
+        Author.show();
+    }
+
+    function leaveAuthor() {
+        Log.report("作者", "离开 @" + Author.name());
+        inAuthor = false;
+        authorResume = null;
+        Author.close();
+        enterTab(tab, "从作者主页返回");            // 接着原来那一条（进来时记了 resumeAt）
     }
 
     // ---------- 登录 / 账号 ----------
@@ -454,6 +554,14 @@
     function uncover(sw, how, lateMs) {
         $("cover").className = "";
         $("mask").className = "";
+        clearTimeout(slowTimer);
+        $("loading").className = "";
+        if (sw && !sw.playing && sw.item.id !== playedId) {
+            /* 和官网一样，一开始放就报（Feed.played：播放一次 + 观看历史），服务器才知道这台电视看过它。 */
+            playedId = sw.item.id;
+            Feed.played(sw.item, {id: watching.id, seen: watching.frac >= 0.95});
+            watching = {id: sw.item.id, frac: 0};
+        }
         if (sw && !sw.playing) {
             sw.playing = true;
             var ps = Player.state();
@@ -472,6 +580,7 @@
     }
     Player.on("ended", function () { next("播完"); });
     Player.on("progress", function (t, d) {
+        if (d && Player.state().id === watching.id) { watching.frac = Math.max(watching.frac, t / d); }
         if (d) { $("bar").style.width = (t / d * 100).toFixed(2) + "%"; }
         $("time").textContent = d ? clock(t) + " / " + clock(d) : "";
     });
@@ -486,19 +595,33 @@
             errorsInRow = 0;
             return;
         }
-        toast("这条放不了，跳到下一条", 1500);
+        toast(why === "太慢" ? "这条加载太慢，跳到下一条" : "这条放不了，跳到下一条", 1500);
         setTimeout(function () { next("出错跳过"); }, 800);
     });
 
     function onKey(e) {
         var k = e.keyCode;
         if (k === KEY.RETURN) {
-            if (Date.now() - backAt < 2000) {
+            /* 作者主页里返回键一层层退：取消选中 → 从放着的作品回到网格 → 回到原来的标签。 */
+            if (authorFocus) { focusAuthor(false); }
+            else if (view === "author") { leaveAuthor(); }
+            else if (inAuthor && view === "feed") { backToGrid(); }
+            else if (Date.now() - backAt < 2000) {
                 try { tizen.application.getCurrentApplication().exit(); } catch (err) {}
             } else {
                 backAt = Date.now();
                 toast("再按一次返回键退出");
             }
+            e.preventDefault();
+            return;
+        }
+        if (view === "author") {
+            if (k === KEY.LEFT) { Author.move(-1, 0); }
+            else if (k === KEY.RIGHT) { Author.move(1, 0); }
+            else if (k === KEY.UP) { Author.move(0, -1); }
+            else if (k === KEY.DOWN) { Author.move(0, 1); }
+            else if (k === KEY.ENTER || k === KEY.PLAY || k === KEY.PLAY_PAUSE) { playFromGrid(); }
+            else { return; }
             e.preventDefault();
             return;
         }
@@ -515,21 +638,33 @@
             return;
         }
         switch (k) {
-        case KEY.DOWN: case KEY.CH_DOWN:
+        case KEY.DOWN:
+            /* 暂停时下键是选中作者（再按确认进主页）；已经选中了就不动。频道减键照旧是下一条。 */
+            if (authorFocus) { break; }
+            if (Player.isPaused()) {
+                var it = feed().current();
+                if (it && it.secUid) { focusAuthor(true); } else { toast("这一条缺作者信息，换一条再试"); }
+                break;
+            }
             next("下键"); break;
-        case KEY.UP: case KEY.CH_UP:
+        case KEY.CH_DOWN:
+            next("下键"); break;
+        case KEY.UP:
+            if (authorFocus) { focusAuthor(false); break; }
             prev(); break;
-        case KEY.ENTER: case KEY.PLAY_PAUSE: case KEY.PLAY: case KEY.PAUSE:
-            var p = Player.toggle();
-            $("paused").className = p ? "show" : "";
-            $("progress").className = p ? "show" : "";
-            showInfo(p);
-            break;
+        case KEY.CH_UP:
+            prev(); break;
+        case KEY.ENTER:
+            if (authorFocus) { openAuthor(); break; }
+            togglePause(); break;
+        case KEY.PLAY_PAUSE: case KEY.PLAY: case KEY.PAUSE:
+            togglePause(); break;
+        /* 在放作者的作品时没有标签可切：左右键只把顶上那行「@谁 的作品 · 返回键回主页」亮出来。 */
         case KEY.LEFT:
-            if (Player.isPaused()) { Player.seek(-10); showInfo(true); } else { moveTab(-1); }
+            if (Player.isPaused()) { Player.seek(-10); showInfo(true); } else if (inAuthor) { showInfo(true); } else { moveTab(-1); }
             break;
         case KEY.RIGHT:
-            if (Player.isPaused()) { Player.seek(10); showInfo(true); } else { moveTab(1); }
+            if (Player.isPaused()) { Player.seek(10); showInfo(true); } else if (inAuthor) { showInfo(true); } else { moveTab(1); }
             break;
         case KEY.REW:
             Player.seek(-10); showInfo(); break;
@@ -588,6 +723,7 @@
     window.__app = {
         tab: function () { return TABS[tab].key; },
         view: function () { return view; },
+        inAuthor: function () { return inAuthor; },
         pos: function () { return feed() ? feed().position() : -1; },
         /* 自测 --ab 用：轮换切换方式、读每次切换的计时。 */
         setPush: function (m) { PUSH_MODE = m; },

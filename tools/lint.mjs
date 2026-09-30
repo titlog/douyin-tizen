@@ -44,6 +44,7 @@ const HOST = [
   "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent", "escape",
   "unescape", "btoa", "atob", "Uint8Array", "Uint8ClampedArray", "ArrayBuffer",
   "DataView", "Promise", "Blob", "Function", "fetch", "performance",
+  "requestAnimationFrame", "PerformanceObserver",
   "tizen", "webapis",
 ];
 
