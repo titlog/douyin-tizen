@@ -14,7 +14,14 @@ var Player = (function () {
     "use strict";
 
     var WARM_BYTES = 524288;
+    /* 长视频的 moov 比 WARM_BYTES 大：26 分钟那条是 1.27MB（2026-09-30 开发机上拆的），开头 512KB
+     * 连元数据都没取全。补取：第一段回来后读出 moov 的长度，补取到 moov 末尾再多 WARM_AFTER_MOOV。
+     * **量不出好处，默认关**（2026-09-30 `--ab`，按视频 id 奇偶分组、同一轮 50 条：元数据中位 补取 627ms /
+     * 不补 613ms，分到长短 moov、两种切换方式里方向还来回翻 —— 是噪声）。和 "blob" 一样，代码留着。 */
+    var MOOV_TOPUP = false;
+    var WARM_AFTER_MOOV = 524288;
     var BLOB_MAX = 30 * 1048576;
+    var moovAB = false;                  // 自测 --ab：补取 / 不补取按视频 id 奇偶分，同轮对照
     var el = null;
     var gen = 0;
     var handlers = {};
@@ -28,6 +35,22 @@ var Player = (function () {
     var warm = {};             // item.id → {state: "在途"|"好了"|"失败", url, ms, bytes}
 
     function isLive(g) { return g === gen; }
+
+    /* 文件开头那几个顶层盒子里 moov 的位置。moov 不在开头（mdat 在前）返回 null，
+     * 字节不够读到 moov 头返回 undefined。 */
+    function findMoov(buf) {
+        var dv = new DataView(buf), off = 0;
+        while (off + 8 <= buf.byteLength) {
+            var size = dv.getUint32(off);
+            var type = String.fromCharCode(dv.getUint8(off + 4), dv.getUint8(off + 5), dv.getUint8(off + 6), dv.getUint8(off + 7));
+            if (size === 1 && off + 16 <= buf.byteLength) { size = dv.getUint32(off + 8) * 4294967296 + dv.getUint32(off + 12); }
+            if (type === "moov") { return {start: off, end: off + size}; }
+            if (type === "mdat" || size < 8) { return null; }
+            off += size;
+        }
+        return undefined;
+    }
+    function mb(n) { return (n / 1048576).toFixed(1) + "MB"; }
 
     function start(url) {
         el.src = url;
@@ -130,7 +153,7 @@ var Player = (function () {
             var w = warm[it.id];
             if (w && w.state === "好了") {
                 usedWarm = (w.mode === "blob" ? "整段" : "开头") + "·好了（" + (w.bytes / 1048576).toFixed(1) + "MB，" +
-                           Math.round((switchAt - w.at) / 1000) + " 秒前备好，用时 " + w.ms + "ms）";
+                           Math.round((switchAt - w.at) / 1000) + " 秒前备好，用时 " + w.ms + "ms" + (w.moovNote ? "，" + w.moovNote : "") + "）";
                 start(w.url);
             } else {
                 usedWarm = w ? (w.mode === "blob" ? "整段" : "开头") + "·" + w.state : "无";
@@ -140,6 +163,7 @@ var Player = (function () {
 
         /* 预热下一条。不创建任何媒体元素（第二个媒体元素会抢走唯一的解码器，见文件顶部）。
          *   "range"：走 302 拿最终地址 + 取开头 WARM_BYTES —— 焐热 CDN 边缘、省掉起播那一跳。
+         *            MOOV_TOPUP 开着时，moov 比这长就对最终地址补取到 moov 末尾 + WARM_AFTER_MOOV（默认关，见上）。
          *   "blob" ：整段下进内存，起播直接放 blob: 地址，一个字节都不走网络。超过 BLOB_MAX 放弃，
          *            退回 range 的效果（起播用跳转接口）。
          * 两种哪个更快是 2026-09-29 的实验，自测构建里轮换比较，见 app.js 的 schedulePreload。 */
@@ -163,17 +187,41 @@ var Player = (function () {
                 x.responseType = "arraybuffer";
                 x.setRequestHeader("Range", "bytes=0-" + (WARM_BYTES - 1));
             }
+            var done = function () { w.state = "好了"; w.ms = Date.now() - t0; w.at = Date.now(); };
             x.onload = function () {
                 if ((x.status === 206 || x.status === 200) && x.responseURL && x.responseURL.indexOf("/aweme/v1/play/") < 0) {
-                    w.state = "好了"; w.ms = Date.now() - t0; w.at = Date.now();
                     if (mode === "blob") {
                         w.bytes = x.response.size;
                         w.url = URL.createObjectURL(x.response);
                         w.blob = true;
-                    } else {
-                        w.bytes = x.response ? x.response.byteLength : 0;
-                        w.url = x.responseURL;
+                        done();
+                        return;
                     }
+                    w.bytes = x.response ? x.response.byteLength : 0;
+                    w.url = x.responseURL;
+                    var m = x.response ? findMoov(x.response) : undefined;
+                    if (m === null) { w.moovNote = "moov 不在开头"; done(); return; }
+                    if (!m) { done(); return; }
+                    var want = m.end + WARM_AFTER_MOOV;
+                    /* 对照组按视频 id 的奇偶分，不按预热次数轮换：每次切换正好发一次新预热，按次数轮换就和
+                     * 逐条轮换的切换方式锁在一起 —— 2026-09-30 第一轮 --ab 就是这样，cover 全是补取、early
+                     * 全是不补，两个实验分不开。 */
+                    var topup = want > w.bytes && (moovAB ? parseInt(String(it.id).slice(-1), 10) % 2 === 0 : MOOV_TOPUP);
+                    w.moovNote = "moov " + mb(m.end - m.start) + (want <= w.bytes ? "" : topup ? "，补取" : moovAB ? "，不补（对照）" : "");
+                    if (!topup) { done(); return; }
+                    /* 补取：直接问 CDN 上的最终地址，不再走那一跳。失败了也算「好了」—— 第一段已经到手。 */
+                    var y = new XMLHttpRequest();
+                    y.open("GET", w.url);
+                    y.timeout = 15000;
+                    y.responseType = "arraybuffer";
+                    y.setRequestHeader("Range", "bytes=" + w.bytes + "-" + (want - 1));
+                    y.onload = function () {
+                        if (y.status === 206 && y.response) { w.moovNote += " " + mb(y.response.byteLength); w.bytes += y.response.byteLength; }
+                        else { w.moovNote += "失败（HTTP " + y.status + "）"; }
+                        done();
+                    };
+                    y.onerror = y.ontimeout = function () { w.moovNote += "失败（连接）"; done(); };
+                    y.send();
                 } else {
                     w.state = "失败（HTTP " + x.status + "）";
                     Log.report("预热", "失败 HTTP " + x.status + " | " + it.desc.slice(0, 16));
@@ -200,12 +248,15 @@ var Player = (function () {
             try { el.load(); } catch (e) {}
         },
         isPaused: function () { return paused; },
+        /* 自测 --ab：预热的 moov 补取和不补取轮换。 */
+        setMoovAB: function (on) { moovAB = !!on; },
         /* 给自测读的快照，不改任何状态。 */
         state: function () {
             return { id: item ? item.id : "", t: el.currentTime, vw: el.videoWidth, vh: el.videoHeight,
                      net: el.networkState, err: el.error ? el.error.code : 0, src: String(el.currentSrc || el.src || "").slice(0, 40),
                      elPaused: el.paused, buffered: el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0, dur: el.duration || 0, readyState: el.readyState,
-                     paused: el.paused, shown: told, sinceSwitch: Date.now() - switchAt };
+                     paused: el.paused, shown: told, sinceSwitch: Date.now() - switchAt,
+                     meta: marks.loadedmetadata || 0, warm: usedWarm };
         }
     };
 })();

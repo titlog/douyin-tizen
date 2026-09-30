@@ -280,5 +280,52 @@
         });
     }
 
-    window.addEventListener("load", function () { setTimeout(SELFTEST === "soak" ? soak : SELFTEST === "qr" ? qrOnly : run, 500); });
+    function median(a) {
+        if (!a.length) { return -1; }
+        var s = a.slice().sort(function (x, y) { return x - y; });
+        return s[Math.floor(s.length / 2)];
+    }
+
+    /* --ab：只刷，同一轮里轮换两组做法（跨两轮比较会被网络骗，见 CLAUDE.md）。
+     *   切换方式："cover"（新封面盖满 250ms 再换源）和 "early"（按键就换源）逐条轮换，
+     *            比的是从按键算起的 playing / 撤封面。
+     *   预热：补取到 moov 末尾 + 512KB / 只取开头 512KB，按视频 id 奇偶分（player.js），比的是元数据。 */
+    function ab() {
+        var N = 50, i = 0, from = 0;
+        Player.setMoovAB(true);
+        function one() {
+            if (i >= N) { return Promise.resolve(); }
+            window.__app.setPush(i % 2 ? "early" : "cover");
+            i++;
+            var before = st().id;
+            key(KEY.DOWN);
+            return waitShown(before, 15000).then(function () { return wait(6000); }).then(one);
+        }
+        return waitShown("", 40000).then(function () {
+            Log.report("AB", "开始：连刷 " + N + " 条，每条看 6 秒；cover/early 逐条轮换，预热补取/不补取按视频 id 奇偶分");
+            return wait(4000);
+        }).then(function () {
+            from = window.__app.records().length;
+            return one();
+        }).then(function () {
+            var rs = window.__app.records().slice(from);
+            ["cover", "early"].forEach(function (m) {
+                var g = rs.filter(function (r) { return r.push === m; });
+                var warmOk = g.filter(function (r) { return r.warm.indexOf("好了") >= 0; });
+                Log.report("AB", "切换 " + m + "：" + g.length + " 次（预热好了 " + warmOk.length + "），按键→playing 中位 " +
+                           median(g.map(function (r) { return r.playing; })) + "ms，按键→撤封面 中位 " + median(g.map(function (r) { return r.frame; })) +
+                           "ms | 全部=" + g.map(function (r) { return r.frame; }).join(","));
+            });
+            [["补取", "moov 补取"], ["不补（对照）", "moov 不补"]].forEach(function (arm) {
+                var g = rs.filter(function (r) { return r.warm.indexOf("好了") >= 0 && r.warm.indexOf(arm[0]) >= 0; });
+                Log.report("AB", arm[1] + "：" + g.length + " 次，元数据 中位 " + median(g.map(function (r) { return r.meta; })) +
+                           "ms | 全部=" + g.map(function (r) { return r.meta; }).join(","));
+            });
+            Log.report("AB", "结束");
+        }, function (e) { Log.report("AB", "中止：" + e.message); });
+    }
+
+    var MODES = {soak: soak, qr: qrOnly, ab: ab};
+    if (SELFTEST === "mse") { return; }                 // js/msespike.js 自己跑
+    window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();

@@ -19,6 +19,8 @@ video {
 #cover { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; display: none; }
 #cover.show { display: block; }
 #cover .img { position: absolute; background: center / cover no-repeat; will-change: transform; }
+/* "early" 切换：整层（黑底 + 封面）一起滑进来，滑到位就盖住旧视频停住的最后一帧。 */
+#cover.solid { background: #000; }
 
 /* 切换中：背景画布提到视频上面，挡住上一条残留的最后一帧；封面在它上面。第一帧上屏后放下。 */
 video { z-index: 0; }

@@ -45,9 +45,15 @@
      * 32–216MB 太大用不上，见 CLAUDE.md；代码留着，默认用 "range"。 */
     var PRELOAD_MODE = "range";
     var pushTimer = 0;        // 往上推的动画结束后才换源
-    /* "video"：旧视频元素自己滑走（真的推）；"cover"：旧视频原地继续播，新封面从下面盖上来。
-     * 设备实测移动 <video> 会让随后的起播慢 0.3–0.4 秒（见 CLAUDE.md），两种都留着。 */
-    var PUSH_MODE = "cover";
+    /* "video"：旧视频元素自己滑走（真的推）；"cover"：旧视频原地继续播，新封面从下面盖上来，
+     * 盖满（250ms）才换源；"early"：按键就换源，旧视频停在最后一帧，一整屏（黑底 + 新封面）
+     * 从下面盖上来 —— 250ms 的动画和起播重叠，不再串行。
+     * 设备实测移动 <video> 会让随后的起播慢 0.3–0.4 秒（见 CLAUDE.md）。"early" 要回答的是
+     * 动画和建管线同时进行会不会也互相拖慢 —— 2026-09-30 两轮 --ab（同一轮里和 "cover" 逐条轮换）：
+     * 按键→撤封面 early 1429 / cover 1750ms（换源→playing 1246 / 1261，没拖慢），另一轮 1522 / 1539。
+     * 两轮都不比 cover 慢，默认改为 "early"。 */
+    var PUSH_MODE = "early";
+    var records = [];         // 每次切换的计时，自测 --ab 读
     var bootAt = Date.now();
     var bootMarks = {};
     var bootTold = false;
@@ -97,6 +103,7 @@
             $("cover").className = "";
             clearTimeout(pushTimer);
             resetSlide($("va"));
+            resetSlide($("cover"));
             $("mask").className = "";
             $("info").className = "";
             $("loading").className = "";
@@ -132,20 +139,24 @@
      *   - 竖屏视频两侧是纯黑（用户要求：封面拉伸出来的模糊彩色背景抢注意力）。
      * **切换时画面上不许有 CSS 滤镜**：一层 blur(40px) 实测让每次切换多一秒多（见 CLAUDE.md）。
      * 「封面」那行日志报图用了多久、封面比例和视频比例。 */
-    function render(item, dir, pushing) {
+    function render(item, dir, push) {
         $("author").textContent = item.author ? "@" + item.author : "";
         $("desc").textContent = item.desc;
         $("stats").textContent = "♥ " + count(item.likes) + "   💬 " + count(item.comments);
-        var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false, push: !!pushing};
-        /* 推的时候旧视频还在滑，黑幕不能先盖上去 —— 换源那一刻（show 里）再盖。 */
-        if (!pushing) { $("mask").className = "over"; }
+        var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false, playingAt: 0, push: push};
+        /* 推的时候旧画面还在，黑幕不能先盖上去 —— "cover"/"video" 在换源那一刻（show 里）再盖；
+         * "early" 不用黑幕：滑进来的是一整屏黑底 + 封面，滑到位就把旧画面全盖住了。 */
+        if (!push) { $("mask").className = "over"; }
         var box = fitBox(item.w, item.h);
-        var im = $("cover").lastChild;
+        var cv = $("cover");
+        var im = cv.lastChild;
         im.style.left = box.l + "px"; im.style.top = box.t + "px";
         im.style.width = box.w + "px"; im.style.height = box.h + "px";
         im.style.backgroundImage = "none";
-        $("cover").className = "show";
-        slideIn(im, dir);
+        cv.className = push === "early" ? "show solid" : "show";
+        resetSlide(cv);
+        resetSlide(im);
+        slideIn(push === "early" ? cv : im, dir);
         if (item.cover) {
             var img = new Image();
             img.onload = function () {
@@ -194,13 +205,13 @@
         clearTimeout(pushTimer);
         resetSlide(v);
         var ps = Player.state();
-        var pushing = !!dir && ps.shown && !!ps.vw;
-        render(item, dir, pushing);
-        if (!pushing) {
-            Player.play(item, TABS[tab].name, startAt);
+        var push = !!dir && ps.shown && !!ps.vw ? PUSH_MODE : "";
+        render(item, dir, push);
+        if (!push || push === "early") {
+            Player.play(item, TABS[tab].name + (push ? "·推(early)" : ""), startAt);
             return;
         }
-        if (PUSH_MODE === "video") { slideOut(v, dir); }
+        if (push === "video") { slideOut(v, dir); }
         pushTimer = setTimeout(function () {
             $("mask").className = "over";
             resetSlide(v);
@@ -387,6 +398,7 @@
 
     Player.on("playing", function () {
         errorsInRow = 0;
+        if (switchInfo && !switchInfo.playingAt) { switchInfo.playingAt = Date.now(); }
         if (bootStartBridge) { bootStartBridge(); bootStartBridge = null; }
         if (!bootTold) {
             bootTold = true;
@@ -405,9 +417,15 @@
             sw.playing = true;
             var ps = Player.state();
             var ar = function (x) { return x ? x.toFixed(2) : "?"; };
+            /* 「到画面」那行从换源算起；"cover" 模式换源比按键晚 250ms，模式之间要比就得从按键算。 */
+            var rec = {push: sw.push || "无", playing: sw.playingAt ? sw.playingAt - sw.at : -1, frame: Date.now() - sw.at,
+                       meta: ps.meta, warm: ps.warm, dur: Math.round(sw.item.dur / 1000)};
+            records.push(rec);
+            if (records.length > 500) { records.shift(); }
             Log.report("封面", (sw.coverMs < 0 ? "出画面时图还没到" : "图 " + sw.coverMs + "ms 到") + "（" + (sw.item.coverKind || "缓存条目") + "），比例 封面 " + ar(sw.ar) +
                        " / 接口给的视频 " + ar(sw.item.h ? sw.item.w / sw.item.h : 0) + " / 实际解码 " + ar(ps.vh ? ps.vw / ps.vh : 0) +
-                       " | 撤封面：" + how + "，比 playing 晚 " + lateMs + "ms" + (sw.push ? " | 推" : ""));
+                       " | 撤封面：" + how + "，比 playing 晚 " + lateMs + "ms" +
+                       " | 按键→playing " + rec.playing + "ms →撤封面 " + rec.frame + "ms" + (sw.push ? " 推(" + sw.push + ")" : ""));
         }
     });
     Player.on("ended", function () { next("播完"); });
@@ -528,6 +546,9 @@
     window.__app = {
         tab: function () { return TABS[tab].key; },
         view: function () { return view; },
-        pos: function () { return feed() ? feed().position() : -1; }
+        pos: function () { return feed() ? feed().position() : -1; },
+        /* 自测 --ab 用：轮换切换方式、读每次切换的计时。 */
+        setPush: function (m) { PUSH_MODE = m; },
+        records: function () { return records; }
     };
 })();
