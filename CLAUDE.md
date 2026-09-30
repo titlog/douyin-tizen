@@ -106,8 +106,11 @@ iframe 推荐流 第2次 status=200 len=188913 items=2 … | 加上的参数=a_b
   Referer 也不带 Origin**。
 - **widget 主 realm 的 CSP 是 `script-src 'self'`**：「直连」对照组注入远程 SDK 失败、
   退回 eval 也被拒，这一组因此没跑成 —— 不影响结论，iframe 这条路已经通了。
-  （bilibili 那边 updater 探测说「远程 https script 标签可用」，这里不一样，没查原因；
-  可能是 `allow-navigation` 或别的配置差异。）
+  **⟶ 2026-09-30 查清：开关就是 `<tizen:allow-navigation>`。** `config.xml` 里出现它（或任何
+  `<tizen:content-security-policy*>`）应用就进「CSP 模式」，没写 CSP 时套默认策略；三样都没有是「WARP 模式」，
+  没有 CSP —— bilibili 就是这样，所以它的远程脚本、`new Function`、`blob:` 脚本都能用。官方
+  Web Runtime 文档里写着。设备实测（同一个探测 widget 只改一个变量，4 个变体）：有 `allow-navigation` 的两个
+  全拦（含 `data:` 图片和 HTML 内联 `style` 属性），没有的两个全放，权限多少无关。
 - 推荐流请求 `count=10`，每次只回 2 条，桌面上也一样。
 
 ## 客户端（app/，2026-09-29 起）
@@ -448,8 +451,9 @@ seek 却又拖了 2 秒，那段时间 append 了 77 段 —— 看着像。做�
 箭头后面是同一天的两处改动，两种做法都受益：
 - **撤封面改成每 20ms 看一次播放头、走过 0.04 秒就撤**：只靠 `timeupdate` 的话它 ~250ms 才来一次，「比 playing 晚」
   ~250ms → 40–60ms。
-- **cover 模式不再把黑幕提到视频上面**（整页黑底已经盖满）：seek→playing ~309 → ~224ms，和 early 一样了。黑幕那一下
-  z-index 变化（盖住视频）本身拖慢 seek ~85ms。
+- **cover 模式不再把黑幕提到视频上面**（整页黑底已经盖满）：seek→playing ~309 → ~224ms，和 early 一样了。**这是跨两轮
+  的比较**（同一轮对照组 early 两轮都是 ~230ms，比较稳，但那一轮同时改了撤封面的判法），不是同轮对照 ——
+  「黑幕盖住视频拖慢 seek」只是推测。
 - 封面图在预热时下好、`decode()`、Image 对象留住（`coverPre`），推的时候同步贴上 —— 之前只 `new Image()` 了一下没留住，
   渲染时还要再等 60–230ms，推的前半段是个黑框。现在 30/30 当场就有。
 
