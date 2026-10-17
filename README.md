@@ -8,6 +8,15 @@
 > **与抖音、字节跳动、三星均无关联。** 个人项目，MIT 协议。
 > 兄弟项目：[bilibili-tizen](https://github.com/titlog/bilibili-tizen)、[telegram-tizen](https://github.com/titlog/telegram-tizen)。
 
+![刷视频](docs/screenshots/01-feed.jpg)
+
+*上下键刷，作者、标题和点赞在右下角，几秒后淡出。*
+
+| | |
+|---|---|
+| ![选中作者](docs/screenshots/02-select-author.jpg) | ![作者主页](docs/screenshots/03-author.jpg) |
+| 暂停时顶上出标签栏；按下键选中作者 | 作者主页：资料和作品网格，往下翻自动加载 |
+
 ## 能做的
 
 - **精选 / 关注 / 推荐 / 我** 四个标签，上下键刷，播完自动下一条；每个标签各记各的位置。
@@ -29,18 +38,38 @@
 | **实测可用** | 三星 2023 年款 65 吋 **CU7090**，固件 Tizen 9.0（Chromium 120） |
 | **其他机型** | 没人试过。装成功或者失败，都欢迎开 issue 说一声机型和固件版本 |
 
-## 安装（从源码）
+## 安装
 
-三星商店不收第三方客户端，只能侧载。电视、开发者模式、三星证书、签名档都沿用
-[bilibili-tizen](https://github.com/titlog/bilibili-tizen) 的配置：先按它 README 里「从源码装」那一节跑一次
-`zsh tools/setup.sh`。然后：
+三星商店不收第三方客户端，只能侧载。**只需要一次**，之后电视上直接开。两条路：
+
+| | 装发布包（推荐） | 从源码装 |
+|---|---|---|
+| 适合 | 只想在电视上刷抖音 | 要改代码、要看诊断日志 |
+| 需要 | 电脑（Windows / macOS / Linux）**或安卓手机**，装上 [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung) | macOS、Node、Tizen Studio 命令行工具 |
+| 升级 | 下载新版 `.wgt`，再装一次 | `git pull`，再跑一次 `deploy.sh` |
+
+**两条路都要先做这一步：** 电视上打开开发者模式——在「应用」页面用遥控器输入 `12345`，打开开关，Host PC IP 填装应用的
+那台电脑或手机的 IP——然后**把电视完整断电重启一次**。2023 年以后的三星电视只认三星签发的证书，两条路都会替你申请。
+
+### 装发布包
+
+1. 到 [Releases](https://github.com/titlog/douyin-tizen/releases/latest) 下载 `douyin-tizen-<版本>.wgt`。
+2. 装 [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung/releases)，电脑版、安卓版都行。
+3. 打开它，选中你的电视（列表里没有就手动输入电视的 IP），应用选自定义 `.wgt`，选第 1 步下载的文件，安装。第一次会让你
+   登录三星账号，替这台电视签证书。
+
+### 从源码装
+
+电视、证书、签名档都沿用 [bilibili-tizen](https://github.com/titlog/bilibili-tizen) 的配置：先按它 README 里「从源码装」
+那一节跑一次 `zsh tools/setup.sh`。然后：
 
 ```bash
 git clone https://github.com/titlog/douyin-tizen.git && cd douyin-tizen
 zsh tools/deploy.sh          # 打包、签名、安装、启动
 ```
 
-更新：`git pull` 之后再跑一次 `deploy.sh`。
+> **两条路不要来回换。** 两边签名用的证书不同，电视不让一个证书签的包覆盖另一个证书签的同名应用。要换路，先在电视上把
+> 旧的删掉再装——删掉会清空扫码登录，要重新扫一次。
 
 ## 调试
 
@@ -63,7 +92,7 @@ app/          客户端（ES5，没有构建步骤）
   js/mse.js      常驻的 MSE 播放管线
   js/vendor/     mp4box.js
 spike/        当初摸清平台的探测工装和桌面测试台
-tools/        部署、日志收集、lint
+tools/        部署、发布包（release.sh）、日志收集、lint
 CLAUDE.md     全部发现、坑，以及怎么在零售机上调试
 ```
 
@@ -88,7 +117,10 @@ Douyin's web API wants an `a_bogus` signature that only the site's own SDK, runn
 correctly. A Tizen web widget can script a `www.douyin.com` iframe, so the official SDK signs requests in a hidden
 frame. The details, measurements and pitfalls are in [`CLAUDE.md`](CLAUDE.md) (Chinese).
 
-Tested on a 2023 Samsung CU7090 (Tizen 9.0). Install from source: set up the TV and the Samsung certificate with
+Tested on a 2023 Samsung CU7090 (Tizen 9.0). The easy way to install: download `douyin-tizen-<version>.wgt` from
+[Releases](https://github.com/titlog/douyin-tizen/releases/latest) and install it with
+[Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung) (desktop or Android) as a custom `.wgt` — enable Developer
+Mode on the TV and power-cycle it first. From source: set up the TV and the Samsung certificate with
 [bilibili-tizen](https://github.com/titlog/bilibili-tizen)'s `tools/setup.sh`, then run `zsh tools/deploy.sh` here.
 
 MIT. mp4box.js is BSD-3-Clause. Not affiliated with Douyin, ByteDance or Samsung.
