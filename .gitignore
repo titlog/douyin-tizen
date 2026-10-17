@@ -8,3 +8,4 @@ author-signature.xml
 signature*.xml
 spike/desktop-harness/*.png
 .DS_Store
+dist/
