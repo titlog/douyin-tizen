@@ -10,12 +10,21 @@
 
 ![刷视频](docs/screenshots/01-feed.jpg)
 
-*上下键刷，作者、标题和点赞在右下角，几秒后淡出。*
+*上下键刷，作者、标题和赞 · 收藏 · 评论数在右下角，几秒后淡出。*
 
 | | |
 |---|---|
-| ![选中作者](docs/screenshots/02-select-author.jpg) | ![作者主页](docs/screenshots/03-author.jpg) |
-| 暂停时顶上出标签栏；按下键选中作者 | 作者主页：资料和作品网格，往下翻自动加载 |
+| ![暂停后按下键](docs/screenshots/02-actions.jpg) | ![评论](docs/screenshots/05-comments.jpg) |
+| 暂停后按下键选中下面那一排：作者 · 评论（带合集的视频还有「合集」） | 评论侧栏：上下键翻，确认键展开回复 |
+| ![合集选集](docs/screenshots/04-mix.jpg) | ![作者主页](docs/screenshots/03-author.jpg) |
+| 合集选集：焦点在正在看的那一集，接着放、下键下一集 | 作者主页：资料和作品网格，往下翻自动加载 |
+
+![「我」](docs/screenshots/06-me.jpg)
+
+*「我」：观看历史 · 喜欢 · 收藏。*
+
+> 截图是在电脑上的测试台里没登录截的（`spike/desktop-harness/readme-shots.mjs`）。「我」那一张没登录看不到，名字和列表是编的
+> （拿截图里那位作者的作品和那个合集填的）。
 
 ## 能做的
 
