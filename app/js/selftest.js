@@ -118,22 +118,22 @@
             key(KEY.ENTER);
             t0 = Date.now();
             function poll() {
-                var a = Author.state();
+                var a = Grid.state();
                 if (a && a.cards > 0 && a.imgs > 0 && (a.stats || Date.now() - t0 > 8000)) { return Promise.resolve(Date.now() - t0); }
                 if (Date.now() - t0 > 20000) { return Promise.resolve(-1); }
                 return wait(300).then(poll);
             }
             return poll();
         }).then(function (ms) {
-            var a = Author.state() || {};
+            var a = Grid.state() || {};
             /* 看得见的结果：卡片的封面真的解码出来了、头部有数字。 */
-            check("确认进作者主页、出网格", window.__app.view() === "author" && ms >= 0 && !!a.stats,
+            check("确认进作者主页、出网格", window.__app.view() === "grid" && ms >= 0 && !!a.stats,
                   ms + "ms，@" + a.name + "，" + a.cards + " 张卡片、封面解码 " + a.imgs + "，头像 " + a.avatar + "px，「" + a.stats + "」" + (a.foot ? "，底下「" + a.foot + "」" : ""));
             if (!a.cards) { throw new Error("网格没出来：" + JSON.stringify(a)); }
             if (a.cards < 3) { return null; }
             key(KEY.RIGHT);
             return wait(400).then(function () {
-                var want = Author.feed().all()[1].id;
+                var want = Grid.feed().all()[1].id;
                 key(KEY.ENTER);
                 return waitId(want, 15000).then(function (ms2) {
                     return longestStall(5000).then(function (stall) {
@@ -142,7 +142,7 @@
                     });
                 });
             }).then(function () {
-                var want = Author.feed().all()[2].id;
+                var want = Grid.feed().all()[2].id;
                 key(KEY.DOWN);
                 return waitId(want, 15000).then(function (ms3) {
                     return longestStall(4000).then(function (stall) {
@@ -155,26 +155,26 @@
             if (!inAuthorNow() || window.__app.view() !== "feed") { return; }
             key(KEY.RETURN);
             return wait(800).then(function () {
-                var a = Author.state() || {};
-                check("返回键回到网格、焦点在刚才那条", window.__app.view() === "author" && a.sel === 2, "视图=" + window.__app.view() + "，焦点 #" + a.sel);
+                var a = Grid.state() || {};
+                check("返回键回到网格、焦点在刚才那条", window.__app.view() === "grid" && a.sel === 2, "视图=" + window.__app.view() + "，焦点 #" + a.sel);
             });
         }).then(function () {
             /* 一直往下翻：快到底了会取下一页。匿名时第二页只回 {"status_code":0}（测试台实测）；登录后给不给，就看这一步。 */
-            if (window.__app.view() !== "author") { return; }
-            var n0 = Author.state().cards, i = 0;
+            if (window.__app.view() !== "grid") { return; }
+            var n0 = Grid.state().cards, i = 0;
             function down() {
                 if (i++ >= 5) { return Promise.resolve(); }
                 key(KEY.DOWN);
                 return wait(700).then(down);
             }
             return down().then(function () { return wait(4000); }).then(function () {
-                var a = Author.state(), f = Author.feed();
+                var a = Grid.state(), f = Grid.feed();
                 var ok = a.cards > n0 || (!f.hasMore() && !(f.gated() && Account.loggedIn()));
                 check("网格往下翻取下一页", ok, "卡片 " + n0 + " → " + a.cards + "，还有更多=" + f.hasMore() + "，第二页只回了 status_code=" + f.gated() +
                       "，" + (Account.loggedIn() ? "已登录" : "未登录") + "，焦点 #" + a.sel + "，底下「" + a.foot + "」");
             });
         }).then(function () {
-            if (window.__app.view() !== "author") { return; }
+            if (window.__app.view() !== "grid") { return; }
             key(KEY.RETURN);
             return waitShown("", 15000).then(function (ms) {
                 return wait(1500).then(function () { return advance(2500); }).then(function (adv) {
@@ -274,13 +274,13 @@
             });
         }).then(function () {
             /* 标签顺序：精选 · 关注 · 推荐 · 我。预期跟着登录态走：已登录时「关注」能播、「我」是
-             * 账号页；未登录时两个都出二维码。**「我」页上绝不按确认键** —— 那是退出登录。 */
+             * 观看历史那些（焦点在顶上那一排，左键回推荐）；未登录时两个都出二维码。 */
             var recId = st().id, recT = st().t;
             var logged = Account.loggedIn();
             key(KEY.RIGHT);
             return (logged ? wait(1500).then(function () { return 0; }) : waitQr(20000)).then(function (ms) {
                 if (logged) {
-                    check("已登录时「我」是账号页", window.__app.tab() === "me" && window.__app.view() === "me", "视图=" + window.__app.view());
+                    check("已登录时「我」是观看历史那些", window.__app.tab() === "me" && window.__app.view() === "grid" && window.__app.page() === "me", "视图=" + window.__app.view() + "，页=" + window.__app.page());
                 } else {
                     check("未登录时「我」出二维码", window.__app.tab() === "me" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
                 }
@@ -500,7 +500,7 @@
         function waitImgs(min, ms) {
             var t0 = Date.now();
             function poll() {
-                var a = Author.state();
+                var a = Grid.state();
                 if (a && a.cards >= min && a.imgs >= a.cards) { return Promise.resolve(true); }
                 if (Date.now() - t0 > ms) { return Promise.resolve(false); }
                 return wait(300).then(poll);
@@ -518,19 +518,19 @@
             key(KEY.ENTER);
             return waitImgs(17, 20000);
         }).then(function (ok) {
-            if (!ok) { throw new Error("网格不到 5 行或封面没到齐：" + JSON.stringify(Author.state())); }
+            if (!ok) { throw new Error("网格不到 5 行或封面没到齐：" + JSON.stringify(Grid.state())); }
             return keys(KEY.DOWN, 6).then(function () { return keys(KEY.UP, 6); }).then(function () { return waitImgs(17, 10000); });
         }).then(function () {
-            Author.probes().length = 0;
+            Grid.probes().length = 0;
             var r = 0;
             function round() {
                 if (r >= ROUNDS) { return Promise.resolve(); }
-                Author.setMode(ARMS[r++ % ARMS.length]);
+                Grid.setMode(ARMS[r++ % ARMS.length]);
                 return keys(KEY.DOWN, 4).then(function () { return keys(KEY.UP, 4); }).then(round);
             }
             return round();
         }).then(function () {
-            var ps = Author.probes();
+            var ps = Grid.probes();
             ARMS.forEach(function (m) {
                 var g = ps.filter(function (p) { return p.mode === m && p.scrolled; });
                 Log.report("GRID", m + "：滚动 " + g.length + " 次，最长帧间隔 中位 " + median(g.map(function (p) { return p.maxGap; })) +
@@ -538,8 +538,8 @@
                            " 次），按键→第一帧 中位 " + median(g.map(function (p) { return p.first; })) + "ms，长任务 共 " + sum(g.map(function (p) { return p.long; })) +
                            "ms | 最长间隔 全部=" + g.map(function (p) { return p.maxGap; }).join(","));
             });
-            Author.setMode("层+瞬");
-            if (window.__app.view() === "author") { key(KEY.RETURN); }
+            Grid.setMode("层+瞬");
+            if (window.__app.view() === "grid") { key(KEY.RETURN); }
             Log.report("GRID", "结束");
         }, function (e) { Log.report("GRID", "中止：" + e.message); });
     }
@@ -574,7 +574,7 @@
             }).then(function () {
                 var presses = 0;
                 function page() {
-                    var f = Author.feed();
+                    var f = Grid.feed();
                     if (!f) { return Promise.resolve(); }
                     var n = f.all().filter(old).length;
                     if (n >= WANT * 3 || (!f.hasMore() && presses > 0) || presses >= 60) { return Promise.resolve(); }
@@ -583,20 +583,20 @@
                 }
                 return page();
             }).then(function () {
-                var all = Author.feed() ? Author.feed().all() : [];
+                var all = Grid.feed() ? Grid.feed().all() : [];
                 var idx = [];
                 for (var i = all.length - 1; i >= 0 && idx.length < WANT; i--) {
                     if (old(all[i]) && (!idx.length || idx[idx.length - 1] - i >= 3)) { idx.push(i); }
                 }
-                Log.report("COLD", "@" + Author.name() + " 翻到 " + all.length + " 条，一年以前的 " + all.filter(old).length + " 条，挑 " + idx.length + " 条");
+                Log.report("COLD", "@" + Grid.name() + " 翻到 " + all.length + " 条，一年以前的 " + all.filter(old).length + " 条，挑 " + idx.length + " 条");
                 return idx;
             });
         }
         function one(i) {
-            var it = Author.feed().all()[i];
+            var it = Grid.feed().all()[i];
             var days = Math.floor((Date.now() / 1000 - it.time) / 86400);
             return quiet(30000).then(function () {
-                Author.select(i);
+                Grid.select(i);
                 key(KEY.ENTER);
                 var t0 = Date.now();
                 function poll() {
@@ -625,7 +625,7 @@
                 function next() { if (k >= idx.length) { return Promise.resolve(); } return one(idx[k++]).then(next); }
                 return next();
             }).then(function () {
-                if (window.__app.view() === "author") { key(KEY.RETURN); }
+                if (window.__app.view() === "grid") { key(KEY.RETURN); }
                 if (res.length >= WANT || tried >= AUTHORS) { return; }
                 /* 这位作者老视频不够：回推荐换下一条的作者。 */
                 return wait(3000).then(function () { var before = st().id; key(KEY.DOWN); return waitShown(before, 15000); })
@@ -641,7 +641,332 @@
         }, function (e) { Log.report("COLD", "中止：" + e.message); });
     }
 
-    var MODES = {soak: soak, qr: qrOnly, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun};
+    function waitFor(fn, ms) {
+        var t0 = Date.now();
+        function poll() {
+            var v = false;
+            try { v = fn(); } catch (e) {}
+            if (v) { return Promise.resolve(Date.now() - t0); }
+            if (Date.now() - t0 > ms) { return Promise.resolve(-1); }
+            return wait(250).then(poll);
+        }
+        return poll();
+    }
+    /* 暂停、下键选中那一排、右键挪到 name 那一个。回挪到没有。 */
+    function pickChip(name) {
+        if (!st().paused) { key(KEY.ENTER); }
+        return wait(800).then(function () {
+            if (window.__app.chip() !== "author" && !window.__app.chip()) { key(KEY.DOWN); }
+            var n = 0;
+            function step() {
+                if (window.__app.chip() === name) { return Promise.resolve(true); }
+                if (n++ >= 6) { return Promise.resolve(false); }
+                key(KEY.RIGHT);
+                return wait(250).then(step);
+            }
+            return wait(300).then(step);
+        });
+    }
+
+    /* 评论侧栏：打开、出评论、往下翻、展开一条的回复、返回键关掉。只读。 */
+    function commentSteps() {
+        var it = window.__app.current();
+        return pickChip("comment").then(function (ok) {
+            if (!ok) { check("选中「评论」", false, "那一排是 " + window.__app.chip()); return; }
+            key(KEY.ENTER);
+            return waitFor(function () { var c = Comments.state(); return c && !c.loading && (c.comments > 0 || c.foot); }, 20000).then(function (ms) {
+                var c = Comments.state() || {};
+                check("评论侧栏出评论", ms >= 0 && (c.comments > 0 || it.comments === 0), ms + "ms，" + c.title + "，" + c.comments + " 条，底下「" + c.foot + "」" + (c.err ? "，错误 " + c.err : ""));
+                if (!c.comments) { return; }
+                key(KEY.DOWN); key(KEY.DOWN); key(KEY.DOWN);
+                return wait(800).then(function () {
+                    var c2 = Comments.state();
+                    check("评论里下键往下走", c2.sel === 3, "焦点第 " + c2.sel + " 行");
+                    if (c2.withReplies < 0) { Log.report("SELFTEST", "这一页评论没有带回复的，跳过展开回复"); return; }
+                    Comments.select(c2.withReplies);
+                    key(KEY.ENTER);
+                    return waitFor(function () { var c3 = Comments.state(); return c3.replies > 0 || /失败/.test(document.getElementById("cm-list").textContent); }, 20000).then(function (ms2) {
+                        var c3 = Comments.state();
+                        check("确认键展开回复", c3.replies > 0, ms2 + "ms，回复 " + c3.replies + " 条" + (c3.replies ? "" : "，" + document.getElementById("cm-list").textContent.match(/回复加载失败[^）]*）/)));
+                    });
+                });
+            }).then(function () {
+                key(KEY.RETURN);
+                return wait(500).then(function () {
+                    check("返回键关掉评论侧栏", !Comments.isOpen() && window.__app.chip() === "comment" && st().paused, "侧栏开着=" + Comments.isOpen() + "，选中=" + window.__app.chip());
+                    key(KEY.RETURN);            // 取消选中
+                    key(KEY.ENTER);             // 接着放
+                    return wait(1000);
+                });
+            });
+        });
+    }
+
+    /* 合集：选中「合集」→ 选集（焦点在这一集）→ 点它接着放 → 下键下一集 → 返回回选集 → 返回回到原来那一条。 */
+    function mixSteps() {
+        var it = window.__app.current(), from = st();
+        return pickChip("mix").then(function (ok) {
+            if (!ok) { check("选中「合集」", false, "那一排是 " + window.__app.chip()); return; }
+            key(KEY.ENTER);
+            return waitFor(function () { var g = Grid.state(); return g && g.kind === "mix" && g.cards > 0 && g.zone === "grid" && Grid.feed().all()[g.sel].id === it.id; }, 30000).then(function (ms) {
+                var g = Grid.state() || {}, f = Grid.feed();
+                check("选集出来、焦点在正在看的这一集", ms >= 0, ms + "ms，《" + g.name + "》第 " + it.mix.ep + " 集，" + g.cards + " 张卡片，焦点 #" + g.sel + "，「" + g.stats + "」");
+                if (ms < 0) { return; }
+                key(KEY.ENTER);
+                return waitId(it.id, 15000).then(function (ms2) {
+                    var s = st();
+                    check("点这一集从刚才的地方接着放", ms2 >= 0 && s.t >= from.t - 1, "出画面 " + ms2 + "ms，离开时 " + from.t.toFixed(1) + "s，现在 " + s.t.toFixed(1) + "s，顶上「" + document.getElementById("tabs").textContent + "」");
+                    var nx = f.all()[f.position() + 1];
+                    if (!nx) { Log.report("SELFTEST", "这已经是合集最后一集，跳过下一集"); return; }
+                    return wait(2000).then(function () {
+                        key(KEY.DOWN);
+                        return waitId(nx.id, 15000);
+                    }).then(function (ms3) {
+                        check("合集里下键是下一集", ms3 >= 0 && nx.mix && nx.mix.ep === it.mix.ep + 1, "出画面 " + ms3 + "ms，第 " + it.mix.ep + " → " + (nx.mix && nx.mix.ep) + " 集");
+                    });
+                }).then(function () {
+                    key(KEY.RETURN);
+                    return wait(800).then(function () {
+                        var g2 = Grid.state() || {};
+                        check("返回键回到选集", window.__app.view() === "grid" && g2.kind === "mix", "视图=" + window.__app.view() + "，焦点 #" + g2.sel);
+                        key(KEY.RETURN);
+                        return waitId(it.id, 15000);
+                    }).then(function (ms4) {
+                        check("再按返回回到原来那一条", ms4 >= 0 && window.__app.page() !== "mix", "出画面 " + ms4 + "ms，页=" + window.__app.page());
+                    });
+                });
+            });
+        });
+    }
+
+    /* --me：「我」（观看历史 · 喜欢 · 收藏）、合集选集、评论侧栏。要已登录。**只读**：不按「退出登录」的确认键，不点赞、不收藏。 */
+    function meRun() {
+        var idx = 0;
+        return waitShown("", 40000).then(function () { return Account.whenKnown(); }).then(function () {
+            if (!Account.loggedIn()) { throw new Error("没登录，「我」页测不了"); }
+            key(KEY.RIGHT);
+            return waitFor(function () { var g = Grid.state(); return window.__app.page() === "me" && g && g.cards > 0 && g.imgs > 0 && g.stats; }, 20000);
+        }).then(function (ms) {
+            var g = Grid.state() || {};
+            check("「我」出观看历史", ms >= 0 && g.zone === "tabs" && g.tab === "history", ms + "ms，「" + g.name + "」「" + g.stats + "」，" + g.cards + " 张卡片、封面 " + g.imgs + "，焦点在 " + g.zone);
+            var all = Grid.feed().all();
+            for (var i = 0; i < all.length; i++) { if (all[i].mix && all[i].comments > 0) { idx = i; break; } }
+            key(KEY.DOWN);
+            return wait(500).then(function () {
+                Grid.select(idx);
+                key(KEY.ENTER);
+                return waitId(all[idx].id, 15000);
+            });
+        }).then(function (ms) {
+            return longestStall(4000).then(function (stall) {
+                check("观看历史里点一条能播", ms >= 0 && stall < 3000 && /观看历史/.test(document.getElementById("tabs").textContent),
+                      "出画面 " + ms + "ms，第 " + idx + " 条" + (window.__app.current().mix ? "（合集第 " + window.__app.current().mix.ep + " 集）" : "（不是合集，观看历史里没找到合集）") + "，顶上「" + document.getElementById("tabs").textContent + "」");
+            });
+        }).then(function () {
+            return window.__app.current().mix ? mixSteps() : null;
+        }).then(function () { return wait(2000); }).then(commentSteps).then(function () {
+            key(KEY.RETURN);
+            return wait(800);
+        }).then(function () {
+            var g = Grid.state() || {};
+            check("返回键回到观看历史的网格", window.__app.view() === "grid" && g.kind === "me" && g.sel === idx, "视图=" + window.__app.view() + "，焦点 #" + g.sel);
+            for (var i = 0; i < 12; i++) { key(KEY.UP); }
+            return wait(600).then(function () {
+                key(KEY.RIGHT);
+                return waitFor(function () { var g2 = Grid.state(); return g2.tab === "like" && (g2.cards > 0 && g2.imgs > 0 || /失败|没有/.test(g2.foot)); }, 20000);
+            });
+        }).then(function (ms) {
+            var g = Grid.state();
+            check("「喜欢」出网格", ms >= 0 && g.cards > 0, ms + "ms，" + g.cards + " 张卡片，底下「" + g.foot + "」");
+            key(KEY.RIGHT);
+            return waitFor(function () { var g2 = Grid.state(); return g2.tab === "collect" && !/正在加载/.test(g2.foot) && (g2.cards > 0 || g2.foot); }, 20000);
+        }).then(function (ms) {
+            var g = Grid.state();
+            check("「收藏」出网格或说是空的", ms >= 0 && !/失败/.test(g.foot), ms + "ms，" + g.cards + " 张卡片，底下「" + g.foot + "」");
+            key(KEY.RIGHT);
+            return wait(600);
+        }).then(function () {
+            var g = Grid.state();
+            check("「退出登录」那一项只写提示（没按确认）", g.tab === "logout" && /退出登录/.test(g.foot) && Account.loggedIn(), "底下「" + g.foot + "」");
+            key(KEY.LEFT); key(KEY.LEFT); key(KEY.LEFT);
+            return wait(800);
+        }).then(function () {
+            key(KEY.LEFT);                   // 观看历史再往左 → 推荐
+            return waitShown("", 15000);
+        }).then(function (ms) {
+            check("「我」顶上那一排最左边再按左键回到推荐", window.__app.tab() === "recommend" && window.__app.view() === "feed" && ms >= 0, "标签=" + window.__app.tab() + "，出画面 " + ms + "ms");
+        }).then(function () {
+            Log.report("SELFTEST", fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）");
+        }, function (e) {
+            Log.report("SELFTEST", "中止：" + e.message + "（" + fails + "/" + steps + " 步失败）");
+        });
+    }
+
+    /* --mix：在推荐里往下刷，找到一条带合集的，把选集走一遍（只读）。 */
+    function mixRun() {
+        var n = 0;
+        function find() {
+            var it = window.__app.current();
+            if (it && it.mix) { return Promise.resolve(it); }
+            if (n++ >= 30) { return Promise.resolve(null); }
+            var before = st().id;
+            key(KEY.DOWN);
+            return waitShown(before, 15000).then(function () { return wait(800); }).then(find);
+        }
+        return waitShown("", 40000).then(function () { return wait(3000); }).then(find).then(function (it) {
+            if (!it) { throw new Error("刷了 30 条都没有合集"); }
+            Log.report("SELFTEST", "第 " + n + " 条是合集《" + it.mix.name + "》第 " + it.mix.ep + " / " + it.mix.total + " 集");
+            return wait(3000).then(mixSteps);
+        }).then(function () {
+            Log.report("SELFTEST", fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）");
+        }, function (e) {
+            Log.report("SELFTEST", "中止：" + e.message + "（" + fails + "/" + steps + " 步失败）");
+        });
+    }
+
+    /* --like：点赞和收藏各做一次、马上取消（这个账号上一来一回，最后回到原样）。**真的会写到账号上**，只在用户同意时跑。 */
+    function likeRun() {
+        Act.allowInSelftest();
+        function toggle(name, field, want) {
+            var it = window.__app.current();
+            return pickChip(name).then(function (ok) {
+                if (!ok) { check("选中「" + name + "」", false, "那一排是 " + window.__app.chip()); return -1; }
+                key(KEY.ENTER);
+                return waitFor(function () { return it[field] === want && !/busy/.test(document.getElementById("act-" + name).className); }, 15000);
+            }).then(function (ms) {
+                check((want ? "" : "取消") + (name === "like" ? "点赞" : "收藏"), ms >= 0 && it[field] === want,
+                      ms + "ms，" + field + "=" + it[field] + "，数字「" + document.getElementById("act-" + name).textContent + "」，提示「" + document.getElementById("toast").textContent + "」");
+                key(KEY.UP);
+                return wait(1500);
+            });
+        }
+        var it0;
+        return waitShown("", 40000).then(function () { return Account.whenKnown(); }).then(function () {
+            if (!Account.loggedIn()) { throw new Error("没登录，点赞测不了"); }
+            return wait(3000);
+        }).then(function () {
+            /* 挑一条这个账号没赞过、没收过的。 */
+            var n = 0;
+            function find() {
+                var it = window.__app.current();
+                if (it && !it.digged && !it.collected) { return Promise.resolve(it); }
+                if (n++ >= 5) { return Promise.resolve(null); }
+                var before = st().id;
+                key(KEY.DOWN);
+                return waitShown(before, 15000).then(find);
+            }
+            return find();
+        }).then(function (it) {
+            if (!it) { throw new Error("连着几条都赞过或收过"); }
+            it0 = it;
+            Log.report("SELFTEST", "用 " + it.id + " 测（赞 " + it.likes + "，收藏 " + it.collects + "）");
+            return toggle("like", "digged", true);
+        }).then(function () { return toggle("like", "digged", false); })
+          .then(function () { return toggle("collect", "collected", true); })
+          .then(function () { return toggle("collect", "collected", false); })
+          .then(function () {
+            check("一来一回之后回到原样", !it0.digged && !it0.collected, "digged=" + it0.digged + " collected=" + it0.collected);
+            if (st().paused) { key(KEY.ENTER); }
+            Log.report("SELFTEST", fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）");
+        }).catch(function (e) {
+            Log.report("SELFTEST", "中止：" + e.message + "（" + fails + "/" + steps + " 步失败）");
+        });
+    }
+
+    /* --probe：登录态下把「我」页、合集、评论要用的接口各问一次，只报形状（状态码、字段名、条数、翻页游标），
+     * **只读，一个写请求都不发**。参数照官网前端代码（2026-10-18 从全新匿名浏览器存下的 bundle 里读的）。 */
+    function probeRun() {
+        var R = function (m) { Log.report("PROBE", m); };
+        var keys = function (o) { return o && typeof o === "object" ? Object.keys(o).sort().join(",") : String(o); };
+        var awemes = [];
+        var mixOf = function (list) { return list.filter(function (a) { return a && a.mix_info && a.mix_info.mix_id; }); };
+        var marks = function (a) { return a ? "user_digged=" + a.user_digged + " collect_stat=" + a.collect_stat + " collect_count=" + (a.statistics || {}).collect_count : "无"; };
+        var secUid = "";
+        function step(name, p) {
+            return p.then(function (j) { return j; }, function (e) { R(name + " 失败：" + e.message); return null; });
+        }
+        return Account.whenKnown().then(function () {
+            R("开始，登录态 " + Account.loggedIn());
+            return step("history/read", Bridge.get("/aweme/v1/web/history/read/", {max_cursor: "0", count: "20"}));
+        }).then(function (j) {
+            if (!j) { return; }
+            var l = j.aweme_list || [];
+            awemes = awemes.concat(l);
+            R("history/read status=" + j.status_code + " 顶层=" + keys(j) + " 条数=" + l.length + " has_more=" + j.has_more + " max_cursor=" + j.max_cursor +
+              " aweme_date=" + (j.aweme_date ? Object.keys(j.aweme_date).length + " 个，样例 " + JSON.stringify(j.aweme_date[Object.keys(j.aweme_date)[0]]) : "无") +
+              " | 带合集的 " + mixOf(l).length + " 条 | 第一条 " + marks(l[0]) + " 图文=" + !!(l[0] && l[0].images));
+            if (j.max_cursor) {
+                return step("history/read 第二页", Bridge.get("/aweme/v1/web/history/read/", {max_cursor: String(j.max_cursor), count: "20"})).then(function (k) {
+                    if (k) { R("history/read 第二页 status=" + k.status_code + " 条数=" + (k.aweme_list || []).length + " has_more=" + k.has_more + " max_cursor=" + k.max_cursor); }
+                });
+            }
+        }).then(function () {
+            return step("profile/self", Bridge.get("/aweme/v1/web/user/profile/self/", {source: "channel_pc_web", personal_center_strategy: "1"}));
+        }).then(function (j) {
+            if (!j) { return; }
+            var u = j.user || {};
+            secUid = u.sec_uid || "";
+            R("profile/self status=" + j.status_code + " " + (j.status_msg || "") + " sec_uid=" + (secUid ? "有" : "无") + " 昵称=" + (u.nickname ? u.nickname.length + " 字" : "无") +
+              " 头像=" + !!(u.avatar_thumb || u.avatar_300x300) + " favoriting_count=" + u.favoriting_count + " aweme_count=" + u.aweme_count + " | user 字段 " + Object.keys(u).length + " 个");
+            if (!secUid) { return; }
+            return step("favorite", Bridge.get("/aweme/v1/web/aweme/favorite/", {sec_user_id: secUid, max_cursor: "0", min_cursor: "0", whale_cut_token: "", cut_version: "1", count: "18"})).then(function (k) {
+                if (!k) { return; }
+                var l = k.aweme_list || [];
+                awemes = awemes.concat(l);
+                R("favorite status=" + k.status_code + " 顶层=" + keys(k) + " 条数=" + l.length + " has_more=" + k.has_more + " max_cursor=" + k.max_cursor + " | 第一条 " + marks(l[0]));
+            });
+        }).then(function () {
+            return step("listcollection", Bridge.post("/aweme/v1/web/aweme/listcollection/", {}, "cursor=0&count=18"));
+        }).then(function (j) {
+            if (!j) { return; }
+            var l = j.aweme_list || [];
+            awemes = awemes.concat(l);
+            R("listcollection status=" + j.status_code + " 顶层=" + keys(j) + " 条数=" + l.length + " has_more=" + j.has_more + " cursor=" + j.cursor + " | 第一条 " + marks(l[0]));
+            return step("推荐", Bridge.get("/aweme/v1/web/tab/feed/", {count: "10", refresh_index: "1", video_type_select: "1", pull_type: "0", filterGids: "", tag_id: "", share_aweme_id: "", live_insert_type: ""}));
+        }).then(function (j) {
+            var l = j && j.aweme_list || [];
+            awemes = awemes.concat(l);
+            R("推荐一页 条数=" + l.length + " 第一条 " + marks(l[0]));
+            var mixes = mixOf(awemes);
+            R("合集：一共看了 " + awemes.length + " 条，带 mix_info 的 " + mixes.length + " 条" + (mixes[0] ? " | mix_info 字段 " + keys(mixes[0].mix_info) + " statis=" + JSON.stringify(mixes[0].mix_info.statis) + " 名字 " + String(mixes[0].mix_info.mix_name).length + " 字" : ""));
+            if (!mixes[0]) { return; }
+            var m = mixes[0].mix_info;
+            return step("mix/aweme", Bridge.get("/aweme/v1/web/mix/aweme/", {mix_id: m.mix_id, cursor: "0", count: "12"})).then(function (k) {
+                if (!k) { return; }
+                var l2 = k.aweme_list || [];
+                R("mix/aweme status=" + k.status_code + " 顶层=" + keys(k) + " 条数=" + l2.length + " has_more=" + k.has_more + " cursor=" + k.cursor +
+                  " 集数=" + l2.map(function (a) { return a.mix_info && a.mix_info.statis ? a.mix_info.statis.current_episode : "?"; }).join(","));
+                if (!k.has_more) { return; }
+                return step("mix/aweme 第二页", Bridge.get("/aweme/v1/web/mix/aweme/", {mix_id: m.mix_id, cursor: String(k.cursor), count: "12"})).then(function (q) {
+                    if (q) { R("mix/aweme 第二页 status=" + q.status_code + " 条数=" + (q.aweme_list || []).length + " has_more=" + q.has_more + " cursor=" + q.cursor +
+                               " 集数=" + (q.aweme_list || []).map(function (a) { return a.mix_info && a.mix_info.statis ? a.mix_info.statis.current_episode : "?"; }).join(",")); }
+                });
+            });
+        }).then(function () {
+            var target = awemes.filter(function (a) { return a && (a.statistics || {}).comment_count > 30; })[0];
+            if (!target) { R("没有评论多的条目"); return; }
+            return step("comment/list", Bridge.get("/aweme/v1/web/comment/list/", {aweme_id: target.aweme_id, cursor: "0", count: "20", item_type: "0", insert_ids: "",
+                                                                               whale_cut_token: "", cut_version: "1", rcFT: ""})).then(function (j) {
+                if (!j) { return; }
+                var c = j.comments || [];
+                var c0 = c[0] || {};
+                R("comment/list status=" + j.status_code + " 顶层=" + keys(j) + " 条数=" + c.length + " total=" + j.total + "（视频说 " + target.statistics.comment_count + "）has_more=" + j.has_more + " cursor=" + j.cursor);
+                R("评论字段 " + keys(c0) + " | user 字段 " + keys(c0.user) + " | 带图 " + c.filter(function (x) { return x.image_list; }).length + " 带表情 " + c.filter(function (x) { return x.sticker; }).length +
+                  " ip_label 样例 " + c0.ip_label + " create_time " + c0.create_time + " 有回复的 " + c.filter(function (x) { return x.reply_comment_total > 0; }).length);
+                var withReply = c.filter(function (x) { return x.reply_comment_total > 0; })[0];
+                if (!withReply) { return; }
+                return step("comment/list/reply（v2）", Bridge.get("/aweme/v2/web/comment/list/reply/", {item_id: target.aweme_id, comment_id: withReply.cid, cursor: "0", count: "3",
+                                                                                             item_type: "0", whale_cut_token: "", cut_version: "1"})).then(function (k) {
+                    if (!k) { return; }
+                    var r = k.comments || [];
+                    R("reply status=" + k.status_code + " 顶层=" + keys(k) + " 条数=" + r.length + " total=" + k.total + "（评论说 " + withReply.reply_comment_total + "）has_more=" + k.has_more + " cursor=" + k.cursor +
+                      " | 回复字段 " + keys(r[0]) + " reply_to_username=" + (r[0] ? (r[0].reply_to_username ? "有" : "无") : "-"));
+                });
+            });
+        }).then(function () { R("结束"); }, function (e) { R("中止：" + e.message); });
+    }
+
+    var MODES = {soak: soak, qr: qrOnly, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
     if (SELFTEST === "mse") { return; }                 // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();

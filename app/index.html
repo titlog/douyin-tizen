@@ -14,7 +14,7 @@
 <div id="info">
   <div id="author"></div>
   <div id="desc"></div>
-  <div id="stats"></div>
+  <div id="stats"><span id="act-like" class="act"></span><span id="act-collect" class="act"></span><span id="act-comment" class="act"></span><span id="act-mix" class="act"></span></div>
   <div id="time"></div>
   <div id="hint"></div>
 </div>
@@ -26,19 +26,21 @@
   <div id="login-msg"></div>
   <div class="hint">左右键切换标签</div>
 </div>
-<div id="me">
-  <div id="me-msg"></div>
-  <div id="me-hint"></div>
-</div>
-<div id="author-page">
-  <div id="ap-scroll">
-    <img id="ap-avatar" alt="">
-    <div id="ap-name"></div>
-    <div id="ap-stats"></div>
-    <div id="ap-sign"></div>
-    <div id="ap-grid"></div>
-    <div id="ap-foot"></div>
+<div id="grid-page">
+  <div id="gp-scroll">
+    <img id="gp-avatar" alt="">
+    <div id="gp-name"></div>
+    <div id="gp-stats"></div>
+    <div id="gp-sign"></div>
+    <div id="gp-tabs"></div>
+    <div id="gp-grid"></div>
+    <div id="gp-foot"></div>
   </div>
+</div>
+<div id="comments">
+  <div id="cm-title"></div>
+  <div id="cm-view"><div id="cm-list"></div></div>
+  <div id="cm-hint">上下键翻 · 确认键展开回复 · 返回键关掉</div>
 </div>
 <div id="empty">
   <div id="empty-msg"></div>
@@ -56,7 +58,9 @@
 <script src="js/feed.js"></script>
 <script src="js/account.js"></script>
 <script src="js/login.js"></script>
-<script src="js/author.js"></script>
+<script src="js/grid.js"></script>
+<script src="js/act.js"></script>
+<script src="js/comments.js"></script>
 <script src="js/vendor/mp4box.js"></script>
 <script src="js/mse.js"></script>
 <script src="js/player.js"></script>

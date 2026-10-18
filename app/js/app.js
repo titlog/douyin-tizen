@@ -1,16 +1,19 @@
 /* 界面与遥控器。
  *
  * 顶部四个标签：精选 · 关注 · 推荐 · 我（默认进推荐）（像抖音 App 横滑切标签）。前三个是视频流，每个标签
- * 各记各的位置，切回来接着看；「我」是登录 / 账号页。未登录时「关注」也显示扫码登录。
+ * 各记各的位置，切回来接着看；「我」登录了是观看历史 · 喜欢 · 收藏的网格（js/grid.js），没登录是扫码登录。
+ * 未登录时「关注」也显示扫码登录。
  *
  * 遥控器：
  *   下键 / 频道减 → 下一条        上键 / 频道加 → 上一条
  *   左右键 → 切标签（暂停时改为快退 / 快进 10 秒）
  *   快进 / 快退键 → 任何时候都快进 / 快退 10 秒
- *   确认 / 播放暂停键 → 暂停；在「我」页上是退出登录（按两次）
- *   暂停时下键 → 选中作者，再按确认 → 作者主页（js/author.js）；返回键一层层退回来
+ *   确认 / 播放暂停键 → 暂停
+ *   暂停时下键 → 选中下面那一排：作者 · 点赞 · 收藏 · 评论 · 合集（左右键换，确认键做，上键 / 返回键取消）
+ *     作者 → 作者主页，合集 → 选集（都是 js/grid.js 的网格页），评论 → 右边的评论侧栏（js/comments.js）
+ *   网格页（作者主页、「我」、选集）：确认键从这一条开始放，放着的时候上下键在这一页里刷；返回键一层层退回来
  *   返回键按两次 → 退出
- * 竖屏视频居中、两侧垫一层模糊的封面；横屏视频铺满。
+ * 竖屏视频居中、两侧纯黑；横屏视频铺满。
  */
 (function () {
     "use strict";
@@ -33,7 +36,7 @@
     var tab = -1;
     var feeds = {};
     var resumeAt = {};
-    var view = "";            // "feed" | "login" | "me" | "empty" | "wait"
+    var view = "";            // "feed" | "login" | "grid" | "empty" | "wait"
     var busy = false;
     var errorsInRow = 0;
     var preloadTimer = 0;
@@ -41,9 +44,12 @@
     var backAt = 0;
     var logoutAt = 0;
     var loginFor = "";        // 登录是从哪个标签发起的，成功后回到那里
-    var inAuthor = false;     // 在作者主页里：看网格（view "author"）或者在放 TA 的作品（view "feed"，feed() 是 TA 的）
-    var authorFocus = false;  // 暂停时下键选中了作者
-    var authorResume = null;  // 从 TA 的作品回到网格时那一条放到了哪（{id, t}），再点它接着放
+    /* 叠起来的网格页（作者主页、「我」、选集）：{page, feed, play, resume, at, root}。最上面那一页要么在显示网格（play=false，
+     * view "grid"），要么在放它的视频（play=true，view "feed"，feed() 是它的）。从放着的视频里再打开一页就往上叠一层，
+     * 下面那一层记着放到了哪（at）；返回键一层层退。「我」是标签自己的页（root），退不掉。 */
+    var pages = [];
+    var chip = -1;            // 暂停时下键选中的那一个（chips() 里的下标），-1 是没选中
+    var acting = "";          // 正在等服务器回的点赞 / 收藏（"like:<id>"），等的时候再按不发第二次
     var switchInfo = null;    // 这一次切换：封面图什么时候到、比例多少（「封面」那行日志用）
     var playedId = "";        // 上一次上报「开始放」的是哪一条（从「我」、作者主页回来接着放同一条不再报）
     var watching = {id: "", frac: 0};   // 正在放的这条看到了百分之几（下一条上报时是 pre_item_seen）
@@ -80,8 +86,11 @@
         resumeAt = {};
         for (var i = 0; i < TABS.length; i++) { if (TABS[i].feed) { feeds[TABS[i].key] = Feed.create(TABS[i].key); } }
     }
-    function feed() { return inAuthor ? Author.feed() : feeds[TABS[tab].key]; }
-    function where() { return inAuthor ? "作者" : TABS[tab].name; }     // 「到画面」那行里的出处
+    function topPage() { return pages.length ? pages[pages.length - 1] : null; }
+    /* 正在放的视频流：最上面那一页在放就是它的，否则是标签的。 */
+    function feed() { var e = topPage(); return e ? e.feed : feeds[TABS[tab].key]; }
+    var KIND_NAME = {author: "作者", me: "我", mix: "合集"};
+    function where() { var e = topPage(); return e ? KIND_NAME[e.page.kind] : TABS[tab].name; }     // 「到画面」那行里的出处
 
     /* 「播放」那行里报视频有多老。老视频走冷存储（v*-colds.douyinvod.com），但实测不慢（CLAUDE.md），报出来备查。 */
     function age(item) { return item.time ? " 发布 " + Math.floor((Date.now() / 1000 - item.time) / 86400) + " 天前" : ""; }
@@ -95,10 +104,14 @@
     }
 
     /* 信息层（作者、标题、进度）每次换视频都出来；标签栏只在切标签、暂停时出来 —— 上下刷的
-     * 时候顶部冒出导航是打扰（2026-09-29 用户反馈）。暂停期间和非视频页上标签栏常驻。 */
+     * 时候顶部冒出导航是打扰（2026-09-29 用户反馈）。暂停期间和非视频页上标签栏常驻；作者主页、选集上没有标签栏
+     * （它们是更深的一层），「我」上有（它就是一个标签）；评论侧栏开着时两个都收起来。 */
     function showInfo(withTabs) {
-        $("info").className = view === "feed" ? "show" : "";
-        $("tabs").className = view !== "author" && (withTabs || view !== "feed" || Player.isPaused()) ? "show" : "";
+        var cm = Comments.isOpen();
+        $("info").className = view === "feed" && !cm ? "show" : "";
+        var e = topPage();
+        var tabs = view === "grid" ? e.page.kind === "me" : !cm && (withTabs || view !== "feed" || Player.isPaused());
+        $("tabs").className = tabs ? "show" : "";
         clearTimeout(infoTimer);
         infoTimer = setTimeout(function () {
             if (view === "feed" && !Player.isPaused()) { $("info").className = ""; $("tabs").className = ""; }
@@ -106,10 +119,12 @@
     }
 
     function markTabs() {
-        /* 在放作者的作品：没有标签可切，顶上写是谁的作品、怎么回去。 */
-        if (inAuthor) {
-            $("tabs").innerHTML = "<span class=\"tab on\"></span><span class=\"tab-hint\">返回键回到 TA 的主页</span>";
-            $("tabs").firstChild.textContent = "@" + Author.name() + " 的作品";
+        /* 在放某一页的视频：没有标签可切，顶上写放的是什么、怎么回去。 */
+        var e = topPage();
+        if (e && e.play) {
+            $("tabs").innerHTML = "<span class=\"tab on\"></span><span class=\"tab-hint\"></span>";
+            $("tabs").firstChild.textContent = e.page.playName || (e.page.tabs ? e.page.tabs[e.page.tab].name : "");
+            $("tabs").lastChild.textContent = "返回键回到" + e.page.backName;
             return;
         }
         var html = "";
@@ -119,28 +134,109 @@
         $("tabs").innerHTML = html;
     }
 
-    /* 暂停时下键选中作者：名字亮成一块，下面一行说确认键去哪。提示只在暂停时有 —— 播放时下键是下一条。 */
-    function focusAuthor(on) {
-        authorFocus = on;
-        $("author").className = on ? "focus" : "";
+    // ---------- 暂停时下面那一排：作者 · 点赞 · 收藏 · 评论 · 合集 ----------
+
+    var CHIP_NAME = {author: "作者", like: "点赞", collect: "收藏", comment: "评论", mix: "合集"};
+    function chips(it) {
+        if (!it) { return []; }
+        var c = it.secUid ? ["author"] : [];
+        c.push("like", "collect", "comment");
+        if (it.mix) { c.push("mix"); }
+        return c;
+    }
+    function current() { return view === "feed" && feed() ? feed().current() : null; }
+
+    /* 数字那一排：赞过的心是红的、收过的星是黄的，选中的那个是红底块，等服务器回的时候半透明。 */
+    function paintActs(it) {
+        it = it || current();
+        if (!it) { return; }
+        var on = chip >= 0 ? chips(it)[chip] : "";
+        var set = function (k, txt, lit, shown) {
+            var el = $("act-" + k);
+            el.textContent = txt;
+            el.className = "act" + (lit ? " lit" : "") + (on === k ? " focus" : "") + (acting === k + ":" + it.id ? " busy" : "");
+            el.style.display = shown === false ? "none" : "";
+        };
+        set("like", "♥ " + count(it.likes), it.digged);
+        set("collect", "★ " + (it.collects ? count(it.collects) : "收藏"), it.collected);
+        set("comment", "💬 " + count(it.comments));
+        set("mix", it.mix ? "合集 · 第 " + it.mix.ep + " 集" + (it.mix.total ? " / 共 " + it.mix.total + " 集" : "") : "", false, !!it.mix);
+        $("author").className = on === "author" ? "focus" : "";
+    }
+    function setChip(i) {
+        chip = i;
+        paintActs();
         hint();
     }
+    function chipHint(k, it) {
+        var e = topPage();
+        if (k === "author") { return e && e.page.kind === "author" && e.page.secUid === it.secUid ? "确认键回到 TA 的主页" : "确认键进入 TA 的主页"; }
+        if (k === "like") { return it.digged ? "确认键取消点赞" : "确认键点赞"; }
+        if (k === "collect") { return it.collected ? "确认键取消收藏" : "确认键收藏"; }
+        if (k === "comment") { return "确认键看评论"; }
+        return e && e.page.kind === "mix" && e.page.mixId === it.mix.id ? "确认键回到选集" : "确认键打开合集《" + it.mix.name + "》选集";
+    }
     function hint() {
-        var it = view === "feed" && feed() ? feed().current() : null;
+        var it = current();
         var h = "";
-        if (it && it.secUid && Player.isPaused()) {
-            h = !authorFocus ? "下键选中作者" : (inAuthor ? "确认键回到 TA 的主页" : "确认键进入 TA 的主页") + " · 上键取消";
+        if (it && Player.isPaused() && !Comments.isOpen()) {
+            var c = chips(it);
+            h = chip < 0 ? "下键选中 " + c.map(function (k) { return CHIP_NAME[k]; }).join(" · ") : chipHint(c[chip], it) + " · 左右键换 · 上键取消";
         }
         $("hint").textContent = h;
+    }
+    function doChip() {
+        var it = current();
+        var k = chips(it)[chip];
+        if (k === "author") { openAuthor(); }
+        else if (k === "like" || k === "collect") { toggleAct(k); }
+        else if (k === "comment") { openComments(); }
+        else if (k === "mix") { openMix(); }
+    }
+
+    /* 点赞 / 收藏：服务器说成功了才改（js/act.js）。没登录时说一句去哪登录。 */
+    function toggleAct(kind) {
+        var it = current();
+        var verb = kind === "like" ? "点赞" : "收藏";
+        if (!Account.loggedIn()) { toast("登录后才能" + verb + "：在「我」扫码登录", 3000); return; }
+        var tag = kind + ":" + it.id;
+        if (acting === tag) { return; }
+        acting = tag;
+        var on = kind === "like" ? !it.digged : !it.collected;
+        paintActs();
+        (kind === "like" ? Act.like(it, on) : Act.collect(it, on)).then(function () {
+            if (kind === "like") { it.digged = on; it.likes = Math.max(0, it.likes + (on ? 1 : -1)); }
+            else { it.collected = on; it.collects = Math.max(0, it.collects + (on ? 1 : -1)); }
+            toast(on ? "已" + verb : "已取消" + verb);
+        }, function (e) {
+            toast(verb + "没成功：" + e.message, 3500);
+        }).then(function () {
+            if (acting === tag) { acting = ""; }
+            paintActs();
+            hint();
+        });
+    }
+
+    function openComments() {
+        var it = current();
+        Log.report("评论", "打开 " + it.id + "（" + it.comments + " 条）");
+        Comments.open(it);
+        showInfo();
+    }
+    function closeComments() {
+        Comments.close();
+        showInfo(true);
+        hint();
     }
 
     function setView(v) {
         view = v;
         $("login").className = v === "login" ? "show" : "";
-        $("me").className = v === "me" ? "show" : "";
         $("empty").className = v === "empty" ? "show" : "";
-        $("author-page").className = v === "author" ? "show" : "";
-        focusAuthor(false);
+        if (v !== "grid") { $("grid-page").className = ""; }
+        if (Comments.isOpen()) { Comments.close(); }
+        chip = -1;
+        $("author").className = "";
         if (v !== "feed") {
             $("cover").className = "";
             clearTimeout(pushTimer);
@@ -183,11 +279,12 @@
      * **切换时画面上不许有 CSS 滤镜**：一层 blur(40px) 实测让每次切换多一秒多（见 CLAUDE.md）。
      * 「封面」那行日志报图用了多久、封面比例和视频比例。 */
     function render(item, dir, push) {
+        if (Comments.isOpen()) { closeComments(); }
         $("author").textContent = item.author ? "@" + item.author : "";
-        focusAuthor(false);
+        chip = -1;
+        paintActs(item);
         $("hint").textContent = "";
         $("desc").textContent = item.desc;
-        $("stats").textContent = "♥ " + count(item.likes) + "   💬 " + count(item.comments);
         var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false, playingAt: 0, push: push};
         $("loading").className = "";
         clearTimeout(slowTimer);
@@ -308,6 +405,17 @@
         }, 1500);
     }
 
+    /* 一页的视频放完了：作者主页说是 TA 的最后一个作品，选集说是最后一集。 */
+    function lastMsg(f) {
+        var e = topPage();
+        if (e && e.page.kind === "author") { return "这是 TA 的最后一个作品" + (f.gated() && !Account.loggedIn() ? "（登录后能看更多）" : ""); }
+        if (e && e.page.kind === "mix") {
+            var it = f.current();
+            return it && it.mix && it.mix.total > it.mix.ep ? "合集只更新到这一集" : "这是最后一集";
+        }
+        return f.name + "没有更多了";
+    }
+
     function next(cause) {
         if (busy || view !== "feed") { return; }
         busy = true;
@@ -316,10 +424,11 @@
         if (!f.peekNext()) { $("loading").className = "show"; }
         f.next().then(function (item) {
             busy = false;
-            if (tab !== myTab || view !== "feed" || feed() !== f) { return; }   // 等的时候观众切走了（或进出了作者主页）
+            if (tab !== myTab || view !== "feed" || feed() !== f) { return; }   // 等的时候观众切走了（或进出了网格页）
             $("loading").className = "";
             Log.report("播放", f.name + " #" + f.position() + " " + cause + " " + item.id + " " + (item.author || "") + " " +
-                       item.desc.slice(0, 20) + " " + item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s" + age(item));
+                       item.desc.slice(0, 20) + " " + item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s" + age(item) +
+                       (item.mix ? " 合集第 " + item.mix.ep + " 集" : ""));
             show(item, 0, cause === "下键" || cause === "播完" ? "up" : "");
         }, function (e) {
             busy = false;
@@ -329,7 +438,7 @@
             if (e.message === "没有更多了") {
                 /* 自己放完了最后一条：停在这儿。不停的话 MSE 的播放头停在槽尾，12 秒后看门狗当成卡住。按键的只提示。 */
                 if (cause === "播完" && !Player.isPaused()) { togglePause(); }
-                toast(inAuthor ? "这是 TA 的最后一个作品" + (f.gated() && !Account.loggedIn() ? "（登录后能看更多）" : "") : f.name + "没有更多了", 3000);
+                toast(lastMsg(f), 3000);
             } else if (f.isEmpty()) {
                 $("empty-msg").textContent = f.kind === "follow" ? "你关注的人最近没有新视频" : "这里暂时没有内容（" + e.message + "）";
                 Player.stop();
@@ -351,56 +460,84 @@
         var p = Player.toggle();
         $("paused").className = p ? "show" : "";
         $("progress").className = p ? "show" : "";
+        chip = -1;
         showInfo(p);
-        focusAuthor(false);
+        paintActs();
+        hint();
     }
 
-    // ---------- 作者主页 ----------
+    // ---------- 网格页：作者主页、「我」、选集（js/grid.js） ----------
+
+    /* 从放着的视频里打开一页（作者主页、选集）。下面那一层记住放到了哪，退回来接着放；这一页里要是有正在放的
+     * 这一条（选集里的这一集），点它也从这里接着放。 */
+    function pushPage(page, why) {
+        var st = Player.state(), it = feed().current();
+        var at = st.id && st.shown ? st.t : 0;
+        var e = topPage();
+        if (e) { e.at = at; } else { resumeAt[TABS[tab].key] = at; }
+        Log.report("页面", why + "（从" + where() + " " + (it ? it.id : "") + " " + at.toFixed(1) + "s）");
+        Player.stop();
+        busy = false;
+        pages.push({page: page, feed: null, play: false, resume: it ? {id: it.id, t: at} : null, at: 0, root: false});
+        setView("grid");
+        showInfo(true);
+        Grid.open(page);
+    }
 
     function openAuthor() {
-        if (inAuthor) { backToGrid(); return; }          // 放的本来就是 TA 的作品
-        var it = feed().current();
+        var it = feed().current(), e = topPage();
         if (!it || !it.secUid) { toast("这一条缺作者信息，换一条再试"); return; }
-        var st = Player.state();
-        if (st.id && st.shown) { resumeAt[TABS[tab].key] = st.t; }
-        Log.report("作者", "进入 @" + it.author + "（从" + TABS[tab].name + " " + it.id + " " + (st.t || 0).toFixed(1) + "s）");
-        Player.stop();
-        inAuthor = true;
-        authorResume = null;
-        setView("author");
-        $("tabs").className = "";
-        Author.open(it);
+        if (e && e.page.kind === "author" && e.page.secUid === it.secUid) { backToGrid(); return; }   // 放的本来就是 TA 的作品
+        pushPage(Grid.author(it), "进入 @" + it.author + " 的主页");
     }
 
-    /* 网格上按确认：从这一条开始放 TA 的作品。刚才放过、退回网格的那一条接着放。 */
+    function openMix() {
+        var it = feed().current(), e = topPage();
+        if (e && e.page.kind === "mix" && e.page.mixId === it.mix.id) { backToGrid(); return; }       // 放的本来就是这个合集
+        pushPage(Grid.mix(it), "打开合集《" + it.mix.name + "》第 " + it.mix.ep + " 集");
+    }
+
+    /* 网格上按确认：从这一条开始放这一页的视频。刚才放过、退回网格的那一条接着放。 */
     function playFromGrid() {
-        var i = Author.selected();
-        if (i < 0) { Author.retry(); return; }
-        var f = Author.feed();
+        var e = topPage();
+        var i = Grid.selected();
+        if (i < 0) { Grid.retry(); return; }
+        var f = Grid.feed();
         var it = f.jump(i);
-        var at = authorResume && authorResume.id === it.id ? authorResume.t : 0;
-        Log.report("播放", "作者 #" + i + " 网格点选 " + it.id + " " + it.desc.slice(0, 20) + " " + it.w + "x" + it.h + " " + Math.round(it.dur / 1000) + "s" + age(it) + (at ? " 接着 " + at.toFixed(1) + "s" : ""));
+        var at = e.resume && e.resume.id === it.id ? e.resume.t : 0;
+        e.feed = f;
+        e.play = true;
+        Log.report("播放", where() + (e.page.tabs ? "·" + Grid.tabKey() : "") + " #" + i + " 网格点选 " + it.id + " " + it.desc.slice(0, 20) + " " + it.w + "x" + it.h + " " +
+                   Math.round(it.dur / 1000) + "s" + age(it) + (it.mix ? " 合集第 " + it.mix.ep + " 集" : "") + (at ? " 接着 " + at.toFixed(1) + "s" : ""));
         setView("feed");
         markTabs();
         show(it, at, "");
     }
 
+    /* 放着某一页的视频时按返回：回到那一页的网格，焦点在刚才放的那一条。 */
     function backToGrid() {
+        var e = topPage();
         var st = Player.state();
-        authorResume = st.id && st.shown ? {id: st.id, t: st.t} : null;
+        e.resume = st.id && st.shown ? {id: st.id, t: st.t} : null;
+        e.play = false;
         Player.stop();
         busy = false;
-        setView("author");
-        $("tabs").className = "";
-        Author.show();
+        setView("grid");
+        markTabs();
+        showInfo(true);
+        Grid.show(e.page, Math.max(0, e.feed.position()));
     }
 
-    function leaveAuthor() {
-        Log.report("作者", "离开 @" + Author.name());
-        inAuthor = false;
-        authorResume = null;
-        Author.close();
-        enterTab(tab, "从作者主页返回");            // 接着原来那一条（进来时记了 resumeAt）
+    /* 网格上按返回：退掉这一页，回到下面那一层接着放（下面没有了就是标签自己的视频流）。 */
+    function popPage() {
+        var e = pages.pop();
+        Log.report("页面", "离开" + KIND_NAME[e.page.kind] + "「" + Grid.name() + "」");
+        Grid.close();
+        var below = topPage();
+        if (!below) { enterTab(tab, "从" + KIND_NAME[e.page.kind] + "返回"); return; }   // 接着原来那一条（进来时记了 resumeAt）
+        setView("feed");
+        markTabs();
+        show(below.feed.current(), below.at || 0, "");
     }
 
     // ---------- 登录 / 账号 ----------
@@ -428,6 +565,7 @@
                 }
                 toast("登录成功", 2500);
                 Feed.clearCache();
+                Account.forgetProfile();
                 makeFeeds();
                 enterTab(indexOf(loginFor === "me" ? "recommend" : loginFor), "登录成功");
             });
@@ -448,11 +586,12 @@
         startLogin();
     }
 
+    /* 「我」：每次进这个标签都重新取（看过的、刚赞的要在里面），焦点先在顶上那一排的「观看历史」。 */
     function showMe() {
         Player.stop();
-        setView("me");
-        $("me-msg").textContent = "已登录抖音";
-        $("me-hint").textContent = "推荐和关注用的是你的账号。按确认键退出登录";
+        pages = [{page: Grid.me(), feed: null, play: false, resume: null, at: 0, root: true}];
+        setView("grid");
+        Grid.open(pages[0].page);
     }
 
     function indexOf(key) {
@@ -464,12 +603,13 @@
 
     function enterTab(i, cause) {
         /* 只在已经出画面时记续播点：连按左右键会「路过」一个标签，那一瞬间它还在起播、
-         * currentTime 是 0，照记就把原来的续播点冲掉了。 */
-        if (tab >= 0 && view === "feed") {
+         * currentTime 是 0，照记就把原来的续播点冲掉了。放的是网格页的视频时不记（那不是这个标签的）。 */
+        if (tab >= 0 && view === "feed" && !pages.length) {
             var st = Player.state();
             if (st.id && st.shown) { resumeAt[TABS[tab].key] = st.t; }
         }
         if (Login.active()) { Login.stop(); }
+        if (pages.length) { pages = []; Grid.close(); }
         tab = i;
         busy = false;
         markTabs();
@@ -516,14 +656,25 @@
         enterTab(tab, "重试");
     }
 
-    function logout() {
-        $("me-hint").textContent = "正在退出…";
+    /* 「我」顶上那一排的「退出登录」：按两次确认键。 */
+    function logoutPress() {
+        if (Date.now() - logoutAt >= 3000) { logoutAt = Date.now(); Grid.say("再按一次确认键退出登录"); return; }
+        Grid.say("正在退出…");
         Account.logout().then(function () {
             toast("已退出登录", 2500);
             Feed.clearCache();
             makeFeeds();
             enterTab(indexOf("me"), "退出登录");
-        }, function (err) { $("me-hint").textContent = "退出失败：" + err.message; });
+        }, function (err) { Grid.say("退出失败：" + err.message); });
+    }
+
+    function exitPrompt() {
+        if (Date.now() - backAt < 2000) {
+            try { tizen.application.getCurrentApplication().exit(); } catch (err) {}
+        } else {
+            backAt = Date.now();
+            toast("再按一次返回键退出");
+        }
     }
 
     Player.on("playing", function () {
@@ -602,25 +753,27 @@
     function onKey(e) {
         var k = e.keyCode;
         if (k === KEY.RETURN) {
-            /* 作者主页里返回键一层层退：取消选中 → 从放着的作品回到网格 → 回到原来的标签。 */
-            if (authorFocus) { focusAuthor(false); }
-            else if (view === "author") { leaveAuthor(); }
-            else if (inAuthor && view === "feed") { backToGrid(); }
-            else if (Date.now() - backAt < 2000) {
-                try { tizen.application.getCurrentApplication().exit(); } catch (err) {}
-            } else {
-                backAt = Date.now();
-                toast("再按一次返回键退出");
-            }
+            /* 返回键一层层退：评论侧栏 → 取消选中 → 从放着的视频回到网格 → 退掉这一页 → 退出应用（按两次）。
+             * 「我」是标签自己的页，退不掉：网格里先回到顶上那一排，那一排上再按就是退出。 */
+            var e0 = topPage();
+            if (Comments.isOpen()) { closeComments(); }
+            else if (chip >= 0) { setChip(-1); }
+            else if (view === "feed" && e0 && e0.play) { backToGrid(); }
+            else if (view === "grid" && !e0.root) { popPage(); }
+            else if (view === "grid" && Grid.zone() === "grid" && e0.page.tabs) { Grid.toTabs(); }
+            else { exitPrompt(); }
             e.preventDefault();
             return;
         }
-        if (view === "author") {
-            if (k === KEY.LEFT) { Author.move(-1, 0); }
-            else if (k === KEY.RIGHT) { Author.move(1, 0); }
-            else if (k === KEY.UP) { Author.move(0, -1); }
-            else if (k === KEY.DOWN) { Author.move(0, 1); }
-            else if (k === KEY.ENTER || k === KEY.PLAY || k === KEY.PLAY_PAUSE) { playFromGrid(); }
+        if (view === "grid") {
+            if (k === KEY.LEFT) { if (Grid.move(-1, 0) === "left") { moveTab(-1); } }      // 只有「我」回 "left"
+            else if (k === KEY.RIGHT) { Grid.move(1, 0); }
+            else if (k === KEY.UP) { Grid.move(0, -1); }
+            else if (k === KEY.DOWN) { Grid.move(0, 1); }
+            else if (k === KEY.ENTER || k === KEY.PLAY || k === KEY.PLAY_PAUSE) {
+                if (Grid.zone() === "tabs") { if (Grid.tabKey() === "logout") { logoutPress(); } else { Grid.move(0, 1); } }
+                else { playFromGrid(); }
+            }
             else { return; }
             e.preventDefault();
             return;
@@ -628,43 +781,54 @@
         if (view !== "feed") {
             if (k === KEY.LEFT) { moveTab(-1); }
             else if (k === KEY.RIGHT) { moveTab(1); }
-            else if (k === KEY.ENTER && view === "me") {
-                if (Date.now() - logoutAt < 3000) { logout(); }
-                else { logoutAt = Date.now(); $("me-hint").textContent = "再按一次确认键退出登录"; }
-            } else if (k === KEY.ENTER && view === "empty") { retryTab(); }
+            else if (k === KEY.ENTER && view === "empty") { retryTab(); }
             else if (k === KEY.ENTER && view === "login") { startLogin(); }
             else { return; }
             e.preventDefault();
             return;
         }
+        /* 评论侧栏开着：上下键翻、确认键展开回复、左键关掉；播放暂停键照样管视频。 */
+        if (Comments.isOpen()) {
+            if (k === KEY.UP) { Comments.move(-1); }
+            else if (k === KEY.DOWN) { Comments.move(1); }
+            else if (k === KEY.ENTER) { Comments.enter(); }
+            else if (k === KEY.LEFT) { closeComments(); }
+            else if (k === KEY.PLAY_PAUSE || k === KEY.PLAY || k === KEY.PAUSE) { togglePause(); if (Comments.isOpen()) { showInfo(); } }
+            e.preventDefault();
+            return;
+        }
+        /* 下面那一排选中了：左右键在里面换，确认键做，上键取消。 */
+        if (chip >= 0) {
+            var n = chips(current()).length;
+            if (k === KEY.LEFT) { setChip(Math.max(0, chip - 1)); }
+            else if (k === KEY.RIGHT) { setChip(Math.min(n - 1, chip + 1)); }
+            else if (k === KEY.UP) { setChip(-1); }
+            else if (k === KEY.ENTER) { doChip(); }
+            else if (k === KEY.PLAY_PAUSE || k === KEY.PLAY || k === KEY.PAUSE) { togglePause(); }
+            e.preventDefault();
+            return;
+        }
+        var inPage = !!topPage();
         switch (k) {
         case KEY.DOWN:
-            /* 暂停时下键是选中作者（再按确认进主页）；已经选中了就不动。频道减键照旧是下一条。 */
-            if (authorFocus) { break; }
-            if (Player.isPaused()) {
-                var it = feed().current();
-                if (it && it.secUid) { focusAuthor(true); } else { toast("这一条缺作者信息，换一条再试"); }
-                break;
-            }
+            /* 暂停时下键是选中下面那一排（作者、点赞……）。频道减键照旧是下一条。 */
+            if (Player.isPaused()) { if (current()) { setChip(0); } break; }
             next("下键"); break;
         case KEY.CH_DOWN:
             next("下键"); break;
         case KEY.UP:
-            if (authorFocus) { focusAuthor(false); break; }
             prev(); break;
         case KEY.CH_UP:
             prev(); break;
         case KEY.ENTER:
-            if (authorFocus) { openAuthor(); break; }
-            togglePause(); break;
         case KEY.PLAY_PAUSE: case KEY.PLAY: case KEY.PAUSE:
             togglePause(); break;
-        /* 在放作者的作品时没有标签可切：左右键只把顶上那行「@谁 的作品 · 返回键回主页」亮出来。 */
+        /* 在放网格页的视频时没有标签可切：左右键只把顶上那行「放的是什么 · 返回键回到哪」亮出来。 */
         case KEY.LEFT:
-            if (Player.isPaused()) { Player.seek(-10); showInfo(true); } else if (inAuthor) { showInfo(true); } else { moveTab(-1); }
+            if (Player.isPaused()) { Player.seek(-10); showInfo(true); } else if (inPage) { showInfo(true); } else { moveTab(-1); }
             break;
         case KEY.RIGHT:
-            if (Player.isPaused()) { Player.seek(10); showInfo(true); } else if (inAuthor) { showInfo(true); } else { moveTab(1); }
+            if (Player.isPaused()) { Player.seek(10); showInfo(true); } else if (inPage) { showInfo(true); } else { moveTab(1); }
             break;
         case KEY.REW:
             Player.seek(-10); showInfo(); break;
@@ -725,8 +889,13 @@
     window.__app = {
         tab: function () { return TABS[tab].key; },
         view: function () { return view; },
-        inAuthor: function () { return inAuthor; },
+        /* 最上面那一页是哪种（"author" / "me" / "mix"），没有页是 ""；叠了几层。 */
+        page: function () { var e = topPage(); return e ? e.page.kind : ""; },
+        depth: function () { return pages.length; },
+        inAuthor: function () { var e = topPage(); return !!e && e.page.kind === "author"; },
+        chip: function () { return chip >= 0 ? chips(current())[chip] : ""; },
         pos: function () { return feed() ? feed().position() : -1; },
+        current: current,
         /* 自测 --ab 用：轮换切换方式、读每次切换的计时。 */
         setPush: function (m) { PUSH_MODE = m; },
         records: function () { return records; }
