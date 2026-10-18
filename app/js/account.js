@@ -50,6 +50,21 @@ var Account = (function () {
         });
     }
 
+    /* 自己的资料：「我」页的头部，还有「喜欢」列表要的 sec_uid。2026-10-18 电视上登录态 status_code=0（同一个接口在登录态
+     * 的桌面浏览器里回过 8，那边缺官网会带的签名头；电视上不缺什么）。五分钟内复用，登录 / 退出时作废。 */
+    var profileP = null, profileAt = 0;
+    function profile() {
+        if (profileP && Date.now() - profileAt < 300000) { return profileP; }
+        profileAt = Date.now();
+        profileP = Bridge.get("/aweme/v1/web/user/profile/self/", {source: "channel_pc_web", personal_center_strategy: "1"}).then(function (j) {
+            var u = j.user;
+            if (j.status_code !== 0 || !u || !u.sec_uid) { throw new Error("status_code=" + j.status_code + (j.status_msg ? " " + j.status_msg : "") + (u ? "" : "，没有 user")); }
+            return u;
+        });
+        profileP.catch(function () { profileP = null; });
+        return profileP;
+    }
+
     /* 退出：先让服务器作废会话，再清掉引擎的 jar（连匿名的 ttwid 一起 —— 重建签名桥时
      * 会重新拿），最后重建签名桥。websetting 权限缺失时清 jar 会失败，照实说。 */
     function logout() {
@@ -63,6 +78,7 @@ var Account = (function () {
         }).then(function (jar) {
             Log.report("account", "清 cookie jar：" + jar);
             state = {known: true, loggedIn: false};
+            profileP = null;
             return Bridge.reset();
         });
     }
@@ -70,6 +86,8 @@ var Account = (function () {
     return {
         check: check,
         logout: logout,
+        profile: profile,
+        forgetProfile: function () { profileP = null; },
         loggedIn: function () { return state.loggedIn; },
         whenKnown: function () { return knownP; },
         known: function () { return state.known; }

@@ -5,6 +5,11 @@
  *   精选  POST /aweme/v2/web/module/feed/    module_id=3003101，正文为空也行；每页 20 条，横屏长片居多
  *   关注  GET  /aweme/v1/web/follow/feed/    cursor 翻页；条目包在 data[].aweme 里；未登录没有内容
  *   作者  GET  /aweme/v1/web/aweme/post/     sec_user_id + max_cursor 翻页（作者主页，2026-09-30 在匿名测试台问过）
+ * 「我」页的三排和合集（2026-10-18 电视上登录态 --probe 问过，参数照官网前端代码）：
+ *   观看历史  GET  /aweme/v1/web/history/read/       max_cursor 翻页（应答里给，毫秒）；每页 20 条，另有 aweme_date（id → 看的时间）
+ *   喜欢      GET  /aweme/v1/web/aweme/favorite/     自己的 sec_user_id（profile/self 给）+ max_cursor
+ *   收藏      POST /aweme/v1/web/aweme/listcollection/  正文 cursor、count；应答给下一个 cursor
+ *   合集      GET  /aweme/v1/web/mix/aweme/          mix_id + cursor（集数偏移：cursor=55 从第 56 集开始，任意值都行），每页 12 集
  * 队列在前方不足 LOOKAHEAD 条时就去补，不等看到最后一条才问 —— 一次往返加签名要一两秒，
  * 等到那时候问就是一两秒黑屏。
  */
@@ -19,11 +24,13 @@ var Feed = (function () {
      * 登录 / 退出时 clearCache() 全清，免得新账号先放一串上一个人的推荐。 */
     var CACHE_TTL = 12 * 3600 * 1000;
     var CACHE_MAX = 12;
-    /* v2（2026-09-30）：条目多了 secUid（作者主页要它）。v1 的条目没有，更新后头几条选不中作者（设备自测抓到的），整个丢掉。 */
-    function cacheKey(kind) { return "dy.feed." + kind + ".v2"; }
+    /* v2（2026-09-30）：条目多了 secUid（作者主页要它）。v1 的条目没有，更新后头几条选不中作者（设备自测抓到的），整个丢掉。
+     * v3（2026-10-18）：多了点赞 / 收藏状态和合集（mix）。 */
+    function cacheKey(kind) { return "dy.feed." + kind + ".v3"; }
     function loadCache(kind) {
         try {
             localStorage.removeItem("dy.feed." + kind + ".v1");
+            localStorage.removeItem("dy.feed." + kind + ".v2");
             var c = JSON.parse(localStorage.getItem(cacheKey(kind)) || "null");
             if (c && c.items && Date.now() - c.at < CACHE_TTL) { return c.items; }
         } catch (e) {}
@@ -139,6 +146,16 @@ var Feed = (function () {
 
     function first(list) { return list && list.url_list && list.url_list[0] || ""; }
 
+    /* 合集：条目的 mix_info（2026-10-18 电视上 41 条里 8 条带）。statis.current_episode 是这一条是第几集，
+     * updated_to_episode 是更新到第几集。 */
+    function mixOf(a) {
+        var m = a.mix_info;
+        if (!m || !m.mix_id) { return null; }
+        var s = m.statis || {};
+        return {id: m.mix_id, name: m.mix_name || "", ep: s.current_episode || 0, total: s.updated_to_episode || 0,
+                desc: m.desc || "", cover: first(m.cover_url)};
+    }
+
     /* 返回 null 表示这条不能放，why 里写原因（用来在日志里说清楚跳过了什么）。 */
     function normalise(a, why) {
         if (!a || !a.aweme_id) { why.push("空"); return null; }
@@ -182,7 +199,11 @@ var Feed = (function () {
             h: v.height || 0,
             dur: v.duration || 0,
             likes: st.digg_count || 0,
-            comments: st.comment_count || 0
+            comments: st.comment_count || 0,
+            collects: st.collect_count || 0,
+            digged: !!a.user_digged,      // 登录时：这个账号赞过没有（喜欢列表里的都是 1）
+            collected: !!a.collect_stat,
+            mix: mixOf(a)
         };
     }
 
@@ -243,6 +264,47 @@ var Feed = (function () {
                     page.cursor = j.max_cursor || 0;
                     if (!j.aweme_list && page.n > 1) { page.gated = true; }
                     return {list: j.aweme_list || [], more: !!j.has_more, status: j.status_code, gated: page.gated};
+                });
+            }
+        },
+        history: {
+            name: "观看历史",
+            fetch: function (page) {
+                return Bridge.get("/aweme/v1/web/history/read/", {max_cursor: String(page.cursor || 0), count: "20"}).then(function (j) {
+                    page.cursor = j.max_cursor || 0;
+                    return {list: j.aweme_list || [], more: !!j.has_more && !!j.max_cursor, status: j.status_code};
+                });
+            }
+        },
+        like: {
+            name: "喜欢",
+            fetch: function (page, opts) {
+                return Bridge.get("/aweme/v1/web/aweme/favorite/", {
+                    sec_user_id: opts.secUid, max_cursor: String(page.cursor || 0), min_cursor: "0",
+                    whale_cut_token: "", cut_version: "1", count: "18"
+                }).then(function (j) {
+                    page.cursor = j.max_cursor || 0;
+                    return {list: j.aweme_list || [], more: !!j.has_more && !!j.max_cursor, status: j.status_code};
+                });
+            }
+        },
+        collect: {
+            name: "收藏",
+            fetch: function (page) {
+                return Bridge.post("/aweme/v1/web/aweme/listcollection/", {}, "cursor=" + (page.cursor || 0) + "&count=18").then(function (j) {
+                    page.cursor = j.cursor || 0;
+                    return {list: j.aweme_list || [], more: !!j.has_more, status: j.status_code};
+                });
+            }
+        },
+        /* opts.start：从第几集（偏移量）开始取 —— 选集按 48 集一组，每组一个流，从组的开头取；放到组的最后一集还会接着往后取。 */
+        mix: {
+            name: "合集",
+            fetch: function (page, opts) {
+                var from = page.n === 1 ? opts.start || 0 : page.cursor;
+                return Bridge.get("/aweme/v1/web/mix/aweme/", {mix_id: opts.mixId, cursor: String(from), count: "12"}).then(function (j) {
+                    page.cursor = j.cursor || 0;
+                    return {list: j.aweme_list || [], more: !!j.has_more, status: j.status_code};
                 });
             }
         }

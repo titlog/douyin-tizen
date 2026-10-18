@@ -208,7 +208,10 @@ var Bridge = (function () {
      * cookie 齐全的测试台里也一样），空正文算成功；失败也不计入「连续 3 次失败就重建框」—— 为了一个上报拆掉签名桥不值。 */
     function request(method, path, params, body, quiet) {
         return ready().then(function () {
-            return new Promise(function (ok, bad) {
+            /* 外面再包一层 15 秒：2026-10-18 v1 的评论回复接口回 200 + 空正文 + bdturing-verify 头（人机验证），官网的验证 SDK
+             * 收到它就把请求扣住、等验证码 —— 验证码弹在看不见的框里，onload、ontimeout、onerror 一个都不来，Promise 永远悬着
+             * （电视上 --probe 和桌面测试台都是这样，见 comments.js）。悬着的请求在界面上就是「一直转圈」。 */
+            return withTimeout(new Promise(function (ok, bad) {
                 var win = frame.contentWindow;
                 var all = {};
                 var k;
@@ -231,7 +234,7 @@ var Bridge = (function () {
                 x.ontimeout = function () { bad(new Error("12 秒无响应")); };
                 x.onerror = function () { bad(new Error("连接失败")); };
                 x.send(method === "POST" ? (body || "") : null);
-            });
+            }), 15000, path.replace(/^\/aweme\/v\d\/web\//, ""));
         }).then(function (j) { if (!quiet) { failures = 0; } return j; }, function (e) {
             if (quiet) { throw e; }
             failures++;
