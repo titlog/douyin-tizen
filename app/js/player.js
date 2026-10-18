@@ -113,8 +113,11 @@ var Player = (function () {
     function shown() {
         if (told || !item) { return; }
         if (engine === "mse") {
-            /* seek 还没发出去（现取中），或者播放头还不在这一条的槽里：不是这一条的 playing。 */
-            if (!mseE || !marks.ready || el.currentTime < mseE.base - 0.5 || el.currentTime >= mseE.base + Mse.SLOT) { return; }
+            /* seek 还没发出去（现取中），或者播放头还不在这一条的槽里：不是这一条的 playing。
+             * 判「发没发」要看 marks.ready 有没有记过，不能看真假：回到同一条（Player.stop 只暂停了）不用 seek，管线当场就好，
+             * 记下的是 0ms —— !marks.ready 当成没发，这一条永远不算出画面、封面一直盖着（2026-10-18 桌面测试台从选集退回来撞上的；
+             * 电视上慢，那一下常常过了 1ms，所以设备自测没撞上）。 */
+            if (!mseE || marks.ready === undefined || el.currentTime < mseE.base - 0.5 || el.currentTime >= mseE.base + Mse.SLOT) { return; }
         }
         told = true;
         var detail = engine === "mse" ? "MSE 槽" + mseE.slot + "，seek 发出 " + marks.ready + " seeked " + (marks.seeked || "?") :
