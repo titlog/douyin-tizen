@@ -9,7 +9,7 @@
  *   左右键 → 切标签（暂停时改为快退 / 快进 10 秒）
  *   快进 / 快退键 → 任何时候都快进 / 快退 10 秒
  *   确认 / 播放暂停键 → 暂停
- *   暂停时下键 → 选中下面那一排：作者 · 点赞 · 收藏 · 评论 · 合集（左右键换，确认键做，上键 / 返回键取消）
+ *   暂停时下键 → 选中下面那一排：作者 · 评论 · 合集（左右键换，确认键做，上键 / 返回键取消）
  *     作者 → 作者主页，合集 → 选集（都是 js/grid.js 的网格页），评论 → 右边的评论侧栏（js/comments.js）
  *   网格页（作者主页、「我」、选集）：确认键从这一条开始放，放着的时候上下键在这一页里刷；返回键一层层退回来
  *   返回键按两次 → 退出
@@ -137,10 +137,15 @@
     // ---------- 暂停时下面那一排：作者 · 点赞 · 收藏 · 评论 · 合集 ----------
 
     var CHIP_NAME = {author: "作者", like: "点赞", collect: "收藏", comment: "评论", mix: "合集"};
+    /* 点赞、收藏能不能选：跟着 Act.ready()。2026-10-18 电视上 --like：点赞回空正文、再试 HTTP 403，收藏回 status_code=8
+     * 「用户未登录」，而且第一个点赞请求之后服务器作废了电视上的登录 —— 官网发这两个请求时带 bd-ticket-guard-client-data 这套头
+     * （另一个安全 SDK 算的，打包在官网主程序里，装不进签名桥），我们没有。数字照常显示（手机上赞过的照样是红心），这两项不能选。 */
+    var actTest = false;      // 自测 --like 把这两项放出来（Act 自己还是不发）
     function chips(it) {
         if (!it) { return []; }
         var c = it.secUid ? ["author"] : [];
-        c.push("like", "collect", "comment");
+        if (Act.ready() || actTest) { c.push("like", "collect"); }
+        c.push("comment");
         if (it.mix) { c.push("mix"); }
         return c;
     }
@@ -894,6 +899,8 @@
         depth: function () { return pages.length; },
         inAuthor: function () { var e = topPage(); return !!e && e.page.kind === "author"; },
         chip: function () { return chip >= 0 ? chips(current())[chip] : ""; },
+        /* 自测 --like 用：把点赞、收藏放出来。 */
+        enableActs: function () { actTest = true; },
         pos: function () { return feed() ? feed().position() : -1; },
         current: current,
         /* 自测 --ab 用：轮换切换方式、读每次切换的计时。 */

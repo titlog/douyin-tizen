@@ -126,9 +126,11 @@ app/
   js/log.js      上报到 tools/collect.mjs（:8098），令牌桶限速，连败五次睡五分钟
   js/bridge.js   隐藏 iframe（douyin.com/robots.txt）+ 官网签名 SDK；所有接口经它发（GET/POST）
   js/feed.js     视频流工厂：推荐 / 精选 / 关注各一个实例，前方不足 4 条就补；过滤图文/直播/广告
-  js/account.js  登录态（login_time cookie 在不在）；退出登录
+  js/account.js  登录态（history/read 的 status_code）；自己的资料（profile/self）；退出登录
   js/login.js    扫码登录：隐藏框开官网 login_page，把二维码搬到电视上
-  js/author.js   作者主页：头部资料 + 作品网格（4 列 398×531，3:4），焦点、滚动、往下翻取下一页
+  js/grid.js     网格页：作者主页、「我」（观看历史 · 喜欢 · 收藏）、合集选集共用 —— 头部 + 作品网格（4 列 398×531，3:4），焦点、滚动、往下翻取下一页
+  js/comments.js 评论侧栏（只读）：评论、展开回复
+  js/act.js      点赞、收藏的写请求 —— 没有 ticket guard 头时不发（不带头发过一次，服务器作废了登录，见「「我」页、合集、评论、点赞」）
   js/player.js   一个 <video>，两种放法：默认 MSE（js/mse.js），放不了的那一条换 src；心跳看门狗 12 秒无进展算放不了
   js/mse.js      MSE 常驻管线：每条视频一个时间槽，预热 = 取开头、转 fMP4、append 进槽，切换 = seek
   js/vendor/mp4box.js  渐进式 MP4 → fMP4（0.5.4，包了一层函数，见下文）
@@ -138,8 +140,10 @@ app/
 
 遥控器：下键 / 频道减 → 下一条，上键 / 频道加 → 上一条，确认 / 播放暂停 → 暂停，
 左右键 → 切标签（**暂停时**改为 ∓10 秒），快进 / 快退键 → 任何时候 ±10 秒，返回键按两次退出。
-播完自动下一条。「我」页上按两次确认 → 退出登录。
-**暂停时下键 → 选中作者**（不再是下一条；频道减键照旧是下一条），再按确认 → 作者主页。见下面「作者主页」。
+播完自动下一条。
+**暂停时下键 → 选中下面那一排：作者 · 评论 · 合集**（不再是下一条；频道减键照旧是下一条），左右键换，确认键做，上键 / 返回键取消。
+作者 → 作者主页，合集 → 选集，评论 → 右边的评论侧栏。「我」顶上一排：观看历史 · 喜欢 · 收藏 · 退出登录（退出要按两次确认）。
+网格页（作者主页、「我」、选集）叠成一摞，返回键一层层退。见下面「作者主页」和「「我」页、合集、评论、点赞」。
 
 ```bash
 node tools/collect.mjs | tee <日志文件>   # 终端 1
@@ -148,6 +152,10 @@ zsh tools/deploy.sh --selftest           # 自己派发按键把「刷」走一�
 zsh tools/deploy.sh --author             # 只走作者主页那 7 步，1 分钟
 zsh tools/deploy.sh --grid               # 作者主页网格上下翻，同一轮轮换三种做法比掉帧，2 分钟
 zsh tools/deploy.sh --soak               # 连刷 20 分钟 + 登录页挂 6 分钟，看风控和二维码轮换
+zsh tools/deploy.sh --me                 # 「我」三排、合集选集、评论侧栏；要已登录，只读，30 秒
+zsh tools/deploy.sh --mix                # 推荐里找一条带合集的，把选集走一遍，只读，1–3 分钟
+zsh tools/deploy.sh --probe              # 登录态下把「我」、合集、评论的接口各问一次，只报形状，只读，20 秒
+zsh tools/deploy.sh --like               # 点赞、收藏各一来一回 —— 真的写到账号上，只在用户同意时跑
 ```
 
 收集器断过（哪怕几秒）要重装一次：`log.js` 连撞五次就睡五分钟，正在跑的自测一个字都报不上来。
@@ -531,6 +539,54 @@ Playwright 的 Chrome 关掉跨域检查，按 `STEPS` 派发按键、截图；`
 
 自测的坑：网格里挑的那一条可能**正好就是进来前看的那条**（作者最新的作品），「等换了 id」会超时 —— 判据改成「等挑的
 那条出画面」。
+
+## 「我」页、合集、评论、点赞（2026-10-18）
+
+用户要的四样：「我」页列出观看历史 / 喜欢 / 收藏、合集连播、点赞收藏、只读的评论侧栏。前三样和评论做成了，点赞收藏的接口被拒，界面上先关着。
+
+**接口都照官网前端代码问**：在全新匿名浏览器里打开 douyin.com，把加载到的 JS 全存下来，按路径搜调用点、读参数（比在登录态浏览器里抓包
+安全 —— 见上面「别在用户自己登录着的浏览器里密集调接口」）。然后在电视上用登录态问一次（`zsh tools/deploy.sh --probe`，只读，只报形状）：
+
+| 用途 | 接口 | 结果（电视、登录态） |
+|---|---|---|
+| 观看历史 | `GET /aweme/v1/web/history/read/` max_cursor、count=20 | 0；每页 20 条（图文跳过后常剩 12 左右），`max_cursor` 翻页，另给 `aweme_date`（id → 看的时间） |
+| 自己的资料 | `GET /aweme/v1/web/user/profile/self/` source=channel_pc_web、personal_center_strategy=1 | 0（同一个接口在登录态桌面浏览器里回过 8）；给 `sec_uid`、昵称、头像、获赞 / 喜欢数 |
+| 喜欢 | `GET /aweme/v1/web/aweme/favorite/` 自己的 sec_user_id、max_cursor、min_cursor=0、count | 0，`max_cursor` 翻页 |
+| 收藏 | `POST /aweme/v1/web/aweme/listcollection/` 正文 cursor、count | 0（这个账号收藏是空的，只验了空列表的形状） |
+| 合集 | `GET /aweme/v1/web/mix/aweme/` mix_id、cursor、count=12 | 0；**cursor 是集数偏移**：cursor=55 从第 56 集开始，任意值都行 |
+| 评论 | `GET /aweme/v1/web/comment/list/` aweme_id、cursor、count=20 | 0（匿名也是 0），`total` 和视频的 comment_count 对得上 |
+| 评论回复 | `GET /aweme/v2/web/comment/list/reply/` item_id、comment_id、cursor、count | 0 —— **用 v2**，见下 |
+
+条目自己就带着登录账号的状态：`user_digged`（赞过没有，喜欢列表里全是 1）、`collect_stat`、`statistics.collect_count`，还有合集的
+`mix_info`（`statis.current_episode` 第几集、`updated_to_episode` 更新到第几集；当时 41 条里 8 条带）。缓存 key 因此升到 v3。
+
+**v1 的评论回复接口会让请求永远悬着。** `/aweme/v1/web/comment/list/reply/` 回 200 + 空正文 + `bdturing-verify` 头（解开是
+`{"code":"10000","type":"verify","subtype":"text",…}`，人机验证）。官网的验证 SDK 挂钩着框里的 XHR，收到这个头就把请求扣住、等验证码
+—— 验证码弹在看不见的框里，于是 onload、ontimeout、onerror 一个都不来（`x.timeout` 也不灵，它设在被挂钩的那层上）。电视上 --probe
+和桌面测试台都是这样。v2 正常回数据。顺带：签名桥的每个请求外面现在都包一层 15 秒（`bridge.js`），这类悬着的请求变成一个报错，不再是一直转圈。
+
+**点赞、收藏被拒，而且第一个点赞请求让服务器作废了电视上的登录（--like，用户同意后跑的）。**
+
+| 请求 | 结果 |
+|---|---|
+| `POST /aweme/v1/web/commit/item/digg/` aweme_id、type=1、item_type=0 | 空正文；再试一次 HTTP 403 |
+| `POST /aweme/v1/web/aweme/collect/` aweme_id、action=1、aweme_type=0 | status_code=8「用户未登录」 |
+
+账号上什么都没写进去，但**代价是登录没了**：02:39:01 启动时 history/read 是 0，02:39:06 发出第一个点赞（回空正文），之后收藏回
+「用户未登录」，下一次启动 history/read 也是 8 —— 要重新扫码。看起来是服务器把「没有 ticket guard 头的点赞」当成会话被盗用，直接
+作废。官网发这两个时带 `bd-ticket-guard-client-data` 这套头 —— 另一个安全 SDK（ticket guard）
+算的，`commit/item/digg`、`aweme/collect` 都在它管的路径表里。它打包在官网主程序的 webpack 模块里（还要再动态拉几个
+`uc-secure-*` 的 UMD 包），不像签名那三个 SDK 能单独注入框里。登录时官网登录页已经在 douyin.com 名下存了它的密钥
+（框里看得见 `bd_ticket_guard_client_data`、`__security_mc_1_s_sdk_*` 这些 cookie），所以理论上在框里跑起这个 SDK 就能签 —— **没做**，
+要把那个模块从 webpack 包里抠出来，量大、成不成没把握。**`js/act.js` 在 `SIGNED` 为 false 时一个写请求都不发**（连 `--like`
+也发不出去），界面上点赞、收藏两项跟着不能选，数字照常显示。做出签名头之前别动 `SIGNED`；做出来之后先在一个不要紧的账号上跑 `--like`。
+
+**合集为什么要分组。** 第一版选集从第 1 集一页 12 集往后取，直到取到正在看的那一集（最多 15 页）。设备上第一条就撞上一个 462 集的合集、
+看的是第 461 集 —— 取满 15 页才到第 174 集。现在超过 48 集的分组（顶上一排「1–48 · 49–96 · …」，像抖音 App 的选集），每组一个流、
+从组的开头取，打开时在这一集所在的那一组，最多 4 页就找到。放到一组的最后一集，流接着往后取（下键、播完都是下一集），只是网格每组最多画 48 张。
+
+**设备自测（同一天）**：`--me` 11 步全过（「我」头部和观看历史、点一条能播、评论侧栏、展开回复、喜欢 / 收藏 / 退出登录三排、左键回推荐），
+`--mix` 5 步全过（31 集的合集：焦点在第 30 集、从刚才的位置接着放、下键第 31 集、返回两次回到原来那一条）。分组那一版的合集只在桌面测试台上走过。
 
 ## 推荐里反复刷到看过的视频（2026-09-30 用户反馈：同一条刷到三次）
 

@@ -20,8 +20,12 @@
 ## 能做的
 
 - **精选 / 关注 / 推荐 / 我** 四个标签，上下键刷，播完自动下一条；每个标签各记各的位置。
-- **扫码登录**：官网的登录页在隐藏框里打开，二维码搬到电视上放大；「我」页上退出登录。
-- **作者主页**：暂停时按下键选中作者，确认进主页 —— 资料、作品网格，往下翻自动加载。
+- **扫码登录**：官网的登录页在隐藏框里打开，二维码搬到电视上放大。
+- **「我」**：观看历史、喜欢、收藏三排网格 —— 手机上刷到收藏了的，坐到沙发上在电视上放。
+- **暂停时按下键**选中下面那一排，左右键换、确认键进：
+  - **作者主页**：资料、作品网格，往下翻自动加载；
+  - **合集**：选集，焦点在正在看的那一集，接着放，下键就是下一集；
+  - **评论**：右边列出评论，能展开回复（只读）。
 - 横屏竖屏都铺好，切换有上推动画；常驻的 MSE 播放管线，换一条 0.2–0.5 秒。
 - 播放和观看历史照官网的方式上报，手机上也看得到。
 
@@ -110,7 +114,9 @@ no backend, no proxy, no server; the login stays on the set.
 
 - Four tabs (featured / following / recommended / me), up and down to browse, autoplay next.
 - QR sign-in: the official login page runs in a hidden frame and its QR code is shown full size on the TV.
-- Uploader pages: pause, press down to select the uploader, OK to open their profile and videos.
+- "Me": your watch history, likes and favourites as grids — save it on the phone, watch it on the TV.
+- Pause and press down to pick the uploader (profile and videos), the series (episode list, continues from the
+  current episode) or the comments (read-only side panel with replies).
 - A resident MSE pipeline: switching videos takes 0.2–0.5 s.
 
 Douyin's web API wants an `a_bogus` signature that only the site's own SDK, running on `www.douyin.com`, produces

@@ -824,16 +824,23 @@
         });
     }
 
-    /* --like：点赞和收藏各做一次、马上取消（这个账号上一来一回，最后回到原样）。**真的会写到账号上**，只在用户同意时跑。 */
+    /* --like：点赞和收藏各做一次、马上取消（这个账号上一来一回，最后回到原样）。**真的会写到账号上**，只在用户同意时跑。
+     * 2026-10-18 第一次跑：两个都被拒，**而且服务器作废了电视上的登录**（缺 ticket guard 头，见 act.js）。现在 Act 在有签名头
+     * 之前一个写请求都不发，这一项跑了也只会报「不发」。 */
     function likeRun() {
         Act.allowInSelftest();
+        window.__app.enableActs();
+        var failed = {};
+        /* 赞（收）没成功，就不再测取消 —— 状态本来就是 false，「取消成功」是假通过（2026-10-18 第一次跑就这样）。 */
         function toggle(name, field, want) {
             var it = window.__app.current();
+            if (!want && failed[name]) { Log.report("SELFTEST", "跳过取消" + (name === "like" ? "点赞" : "收藏") + "：上一步没成功，没有东西要取消"); return Promise.resolve(); }
             return pickChip(name).then(function (ok) {
                 if (!ok) { check("选中「" + name + "」", false, "那一排是 " + window.__app.chip()); return -1; }
                 key(KEY.ENTER);
                 return waitFor(function () { return it[field] === want && !/busy/.test(document.getElementById("act-" + name).className); }, 15000);
             }).then(function (ms) {
+                if (want && !(ms >= 0 && it[field] === want)) { failed[name] = true; }
                 check((want ? "" : "取消") + (name === "like" ? "点赞" : "收藏"), ms >= 0 && it[field] === want,
                       ms + "ms，" + field + "=" + it[field] + "，数字「" + document.getElementById("act-" + name).textContent + "」，提示「" + document.getElementById("toast").textContent + "」");
                 key(KEY.UP);
