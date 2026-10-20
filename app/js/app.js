@@ -888,6 +888,23 @@
             startBridge();
         }
         enterTab(START_TAB, "启动");
+
+        /* 自动更新（update.js，2026-10-20，照搬 bilibili）：先报这次跑的是哪份代码、为什么，一分钟后查，之后每六小时。
+         * 自测构建不查：它会自己换视频、量时间，不该有一个后台下载混进去。 */
+        if (typeof SELFTEST === "undefined" || !SELFTEST) {
+            try { Update.init({ report: Log.report, notice: function (t) { toast(t, 4000); } }); }
+            catch (e) { Log.report("update", "Update.init 抛异常：" + (e && e.message)); }
+        }
+        /* 这次启动的代码是好的：onload 走完、之后两秒没有一个 js 错误。boot.js 见到这句才清掉 booting；
+         * 没说这句的启动，下次打开把它跑的那个更新标坏、改跑安装包。不等第一条视频 —— 断网时视频出不来，
+         * 那不是代码坏了，不该为此扔掉一个好版本。跑的是安装包时无害。 */
+        setTimeout(function () {
+            if (Log.errors()) {
+                Log.report("update", "启动后两秒内出过 " + Log.errors() + " 次 js 错误，这次启动不算成功（跑的是更新的话，下次打开退回安装包）");
+                return;
+            }
+            try { Boot.ok(); } catch (e) {}
+        }, 2000);
     };
 
     /* 给自测读的：现在在哪个标签、哪种页面。 */

@@ -37,6 +37,7 @@
   - **评论**：右边列出评论，能展开回复（只读）。
 - 横屏竖屏都铺好，切换有上推动画；常驻的 MSE 播放管线，换一条 0.2–0.5 秒。
 - 播放和观看历史照官网的方式上报，手机上也看得到。
+- **自动更新**（1.2.0 起）：开着应用时查到新版本就在后台下载，下次打开生效，屏幕上提示「已更新到 x.y.z」。
 
 ## 怎么做到的
 
@@ -59,7 +60,7 @@
 |---|---|---|
 | 适合 | 只想在电视上刷抖音 | 要改代码、要看诊断日志 |
 | 需要 | 电脑（Windows / macOS / Linux）**或安卓手机**，装上 [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung) | macOS、Node、Tizen Studio 命令行工具 |
-| 升级 | 下载新版 `.wgt`，再装一次 | `git pull`，再跑一次 `deploy.sh` |
+| 升级 | **1.2.0 起自动更新**（见下）；1.2.0 以前的再装一次新版 `.wgt` | `git pull`，再跑一次 `deploy.sh` |
 
 **两条路都要先做这一步：** 电视上打开开发者模式——在「应用」页面用遥控器输入 `12345`，打开开关，Host PC IP 填装应用的
 那台电脑或手机的 IP——然后**把电视完整断电重启一次**。2023 年以后的三星电视只认三星签发的证书，两条路都会替你申请。
@@ -80,6 +81,12 @@
 git clone https://github.com/titlog/douyin-tizen.git && cd douyin-tizen
 zsh tools/deploy.sh          # 打包、签名、安装、启动
 ```
+
+### 升级
+
+**装着 1.2.0 及以后版本的电视会自己更新**：开着应用时查到新版本就下载，下次打开生效。要真的退出再开才算：按两次返回键退出，
+再从电视主页打开。更新包用这个仓库的钥匙签名，电视下载后先验签名再用，坏了的版本会自动退回安装包里的那份。
+1.2.0 以前的版本没有这个功能，要按上面的步骤再装一次。
 
 > **两条路不要来回换。** 两边签名用的证书不同，电视不让一个证书签的包覆盖另一个证书签的同名应用。要换路，先在电视上把
 > 旧的删掉再装——删掉会清空扫码登录，要重新扫一次。
@@ -105,7 +112,7 @@ app/          客户端（ES5，没有构建步骤）
   js/mse.js      常驻的 MSE 播放管线
   js/vendor/     mp4box.js
 spike/        当初摸清平台的探测工装和桌面测试台
-tools/        部署、发布包（release.sh）、日志收集、lint
+tools/        部署、发布包（release.sh）、日志收集、lint、自动更新（update-*.mjs）
 CLAUDE.md     全部发现、坑，以及怎么在零售机上调试
 ```
 
@@ -127,6 +134,7 @@ no backend, no proxy, no server; the login stays on the set.
 - Pause and press down to pick the uploader (profile and videos), the series (episode list, continues from the
   current episode) or the comments (read-only side panel with replies).
 - A resident MSE pipeline: switching videos takes 0.2–0.5 s.
+- Self-update from 1.2.0: a newer signed version is downloaded in the background and runs from the next launch.
 
 Douyin's web API wants an `a_bogus` signature that only the site's own SDK, running on `www.douyin.com`, produces
 correctly. A Tizen web widget can script a `www.douyin.com` iframe, so the official SDK signs requests in a hidden
@@ -135,7 +143,8 @@ frame. The details, measurements and pitfalls are in [`CLAUDE.md`](CLAUDE.md) (C
 Tested on a 2023 Samsung CU7090 (Tizen 9.0). The easy way to install: download `douyin-tizen-<version>.wgt` from
 [Releases](https://github.com/titlog/douyin-tizen/releases/latest) and install it with
 [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung) (desktop or Android) as a custom `.wgt` — enable Developer
-Mode on the TV and power-cycle it first. From source: set up the TV and the Samsung certificate with
+Mode on the TV and power-cycle it first. From 1.2.0 the app updates itself (the new version runs after you quit and reopen it);
+older versions need the new `.wgt` installed once more. From source: set up the TV and the Samsung certificate with
 [bilibili-tizen](https://github.com/titlog/bilibili-tizen)'s `tools/setup.sh`, then run `zsh tools/deploy.sh` here.
 
 MIT. mp4box.js is BSD-3-Clause. Not affiliated with Douyin, ByteDance or Samsung.

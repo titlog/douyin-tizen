@@ -52,20 +52,9 @@
 <div id="loading"><div class="dot a"></div><div class="dot b"></div><div class="label">正在加载…</div></div>
 <div id="toast"></div>
 
+<!-- 只有两个标签。其余由 boot.js 写：安装包自己的脚本，或者自动更新下载、验过签名的新版本（它的 SCRIPTS 才是
+     现在的加载顺序，新加的文件加在那里，不是这里）。config.js 留在外面：deploy.sh 改写它，更新永远不带它。 -->
 <script src="js/config.js"></script>
-<script src="js/log.js"></script>
-<script src="js/bridge.js"></script>
-<script src="js/feed.js"></script>
-<script src="js/account.js"></script>
-<script src="js/login.js"></script>
-<script src="js/grid.js"></script>
-<script src="js/act.js"></script>
-<script src="js/comments.js"></script>
-<script src="js/vendor/mp4box.js"></script>
-<script src="js/mse.js"></script>
-<script src="js/player.js"></script>
-<script src="js/app.js"></script>
-<script src="js/selftest.js"></script>
-<script src="js/msespike.js"></script>
+<script src="js/boot.js"></script>
 </body>
 </html>

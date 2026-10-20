@@ -51,11 +51,27 @@ for f in "$APP"/js/*.js; do node --check "$f" >/dev/null || { echo "  syntax err
 # node --check 只证明能解析。调用一个被删掉的函数照样放行 —— 2026-09-29 一次按锚点删块
 # 带走了 render()，装上去第一条视频永远不出画面、没有任何报错。lint 抓「调用了不存在的东西」。
 if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/lint.mjs" >/dev/null || { node "$ROOT/tools/lint.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
+# 自动更新（2026-10-20）：钥匙、版本号、CSP 放不放 blob:、boot.js 每种本地状态下选对代码。
+if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/update-verify.mjs" >/dev/null || { node "$ROOT/tools/update-verify.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
+
+# 地址、自测开关、更新源只进包，不进仓库：打完包、或者中途任何一步退出，都改回去。
+restore_config() {
+  sed -i '' -E 's#^var REPORT_TO = "[^"]*";#var REPORT_TO = "";#' "$APP/js/config.js"
+  sed -i '' -E 's#^var SELFTEST = [^;]+;#var SELFTEST = false;#' "$APP/js/config.js"
+  sed -i '' -E 's#^var UPDATE_MANIFEST = "[^"]*";#var UPDATE_MANIFEST = "";#' "$APP/js/config.js"
+}
+trap restore_config EXIT
 
 echo "== report -> http://$HOST_IP:$PORT =="
 sed -i '' -E "s#^var REPORT_TO = \"[^\"]*\";#var REPORT_TO = \"http://$HOST_IP:$PORT\";#" "$APP/js/config.js"
 sed -i '' -E "s#^var SELFTEST = [^;]+;#var SELFTEST = $SELFTEST;#" "$APP/js/config.js"
 echo "  selftest=$SELFTEST"
+# 在电视上测自动更新：DOUYIN_UPDATE_MANIFEST=http://<这台电脑>:<端口>/manifest.json zsh tools/deploy.sh
+# 只有开发构建（REPORT_TO 非空）认它，见 app/js/update.js。
+if [ -n "$DOUYIN_UPDATE_MANIFEST" ]; then
+  sed -i '' -E "s#^var UPDATE_MANIFEST = \"[^\"]*\";#var UPDATE_MANIFEST = \"$DOUYIN_UPDATE_MANIFEST\";#" "$APP/js/config.js"
+  echo "  update manifest=$DOUYIN_UPDATE_MANIFEST"
+fi
 
 echo "== packaging =="
 cd "$APP"
@@ -63,8 +79,7 @@ rm -f ./*.wgt(N)
 tizen package -t wgt -s "$PROFILE" -- . 2>&1 | grep -E "Package File Location|error" || true
 WGTS=(./*.wgt(N)); WGT=${WGTS[1]}
 # 地址已经在包里了，源码改回空串：仓库里不存地址（bilibili 那边踩过一次）。
-sed -i '' -E 's#^var REPORT_TO = "[^"]*";#var REPORT_TO = "";#' "$APP/js/config.js"
-sed -i '' -E 's#^var SELFTEST = [^;]+;#var SELFTEST = false;#' "$APP/js/config.js"
+restore_config
 [ -n "$WGT" ] || { echo "packaging produced no wgt"; exit 1; }
 echo "  built $WGT"
 

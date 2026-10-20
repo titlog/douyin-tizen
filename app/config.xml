@@ -2,7 +2,7 @@
 <widget xmlns="http://www.w3.org/ns/widgets"
         xmlns:tizen="http://tizen.org/ns/widgets"
         id="https://github.com/douyin-tizen/douyin-tizen"
-        version="1.1.0"
+        version="1.2.0"
         viewmodes="maximized">
 
     <tizen:application id="DouYinTv00.DouyinTv"
@@ -20,7 +20,10 @@
          securitypolicyviolation 报出来的原文）。图片落在 default-src *，而 * 不含 data: ——
          登录页的二维码是一张 data:image/png，搬到我们界面上就成了破图标（2026-09-29）。
          其余照抄默认，只给图片加 data:。视频同理：整段预下载的视频放的是 blob: 地址，* 也不含它。 -->
-    <tizen:content-security-policy>default-src *; script-src 'self'; style-src 'self'; object-src 'none'; img-src * data:; media-src * blob:</tizen:content-security-policy>
+    <!-- script-src、style-src 的 blob:（2026-10-20）：自动更新的代码和样式从 localStorage 拿出来，以 blob: 地址交给
+         页面（js/boot.js）。没有它们，下载好的更新一启动就被静默拦掉、下次退回安装包 —— 有 allow-navigation，这里
+         就是「CSP 模式」，bilibili 那边没有 CSP 所以不用加。没加 'unsafe-inline'：blob: 只有我们自己的脚本造得出来。 -->
+    <tizen:content-security-policy>default-src *; script-src 'self' blob:; style-src 'self' blob:; object-src 'none'; img-src * data:; media-src * blob:</tizen:content-security-policy>
     <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"/>
     <icon src="icon.png"/>
     <name>抖音</name>

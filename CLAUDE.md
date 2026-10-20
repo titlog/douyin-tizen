@@ -122,7 +122,10 @@ iframe 推荐流 第2次 status=200 len=188913 items=2 … | 加上的参数=a_b
 
 ```
 app/
-  js/config.js   REPORT_TO（deploy.sh 打包前写入、打包后改回空串）
+  js/config.js   REPORT_TO、SELFTEST、UPDATE_MANIFEST（deploy.sh 打包前写入、打包后或中途退出都改回去）
+  js/boot.js     这次跑哪份代码：安装包的，还是自动更新下载、验过签名的新版本；信任根（公钥），永远不随更新下发。
+                 index.html 只剩 config.js、boot.js 两个标签，**新加脚本加进 boot.js 的 SCRIPTS**（lint 从那里读顺序）
+  js/update.js   查新版本、下载、验签名、存进 localStorage；本身随更新下发。见「自动更新」
   js/log.js      上报到 tools/collect.mjs（:8098），令牌桶限速，连败五次睡五分钟
   js/bridge.js   隐藏 iframe（douyin.com/robots.txt）+ 官网签名 SDK；所有接口经它发（GET/POST）
   js/feed.js     视频流工厂：推荐 / 精选 / 关注各一个实例，前方不足 4 条就补；过滤图文/直播/广告
@@ -156,6 +159,8 @@ zsh tools/deploy.sh --me                 # 「我」三排、合集选集、评�
 zsh tools/deploy.sh --mix                # 推荐里找一条带合集的，把选集走一遍，只读，1–3 分钟
 zsh tools/deploy.sh --probe              # 登录态下把「我」、合集、评论的接口各问一次，只报形状，只读，20 秒
 zsh tools/deploy.sh --like               # 点赞、收藏各一来一回 —— 真的写到账号上，只在用户同意时跑
+node tools/update-verify.mjs             # 自动更新离线验证（deploy、release 都卡着它）
+node tools/update-e2e.mjs                # 自动更新在桌面 Chrome 里带着 config.xml 的 CSP 走一遍（不碰抖音）
 ```
 
 收集器断过（哪怕几秒）要重装一次：`log.js` 连撞五次就睡五分钟，正在跑的自测一个字都报不上来。
@@ -635,3 +640,46 @@ Playwright 的 Chrome 关掉跨域检查，按 `STEPS` 派发按键、截图；`
      频繁登出登入也可能招风控。
   3. 自己逆向抖音电视版那种带 token 的登录：要它 App 的私有签名，工作量和风险都不成比例，不考虑。
 
+## 自动更新（2026-10-20，用户要求，照搬 bilibili）
+
+和 bilibili 那套是同一份代码（那边 `docs/自动更新.md` 有完整的来龙去脉）：签名过的 `update/manifest.json` 从 master 取，
+更新包按 tag 取，下载时验 ECDSA 签名和 sha256，存进 localStorage，**下次打开生效**；`boot.js` 在页面解析期间用
+`document.write` 写脚本；走不到首页的更新包下次启动标坏、退回安装包。**已经装着的电视要先侧载一次 1.2.0**，之后才会自己更新。
+
+**这里多出来的一件事：这个应用是「CSP 模式」**（`config.xml` 里有 `allow-navigation`，签名桥要它），bilibili 不是。
+默认策略 `script-src 'self'` 静默拦掉 `blob:` 脚本 —— 更新包的代码正是从 localStorage 拿出来、以 `blob:` 地址交给页面的。
+所以 `config.xml` 的 `script-src`、`style-src` 各加了 `blob:`，样式也改成 `blob:` 的 `<link>`（bilibili 用内联 `<style>`，
+这里会被拦；没加 `'unsafe-inline'`）。`update-verify` 卡着 CSP 里有这两个 `blob:`。
+
+| 测量 | 结果 |
+|---|---|
+| 桌面 e2e，CSP 作为响应头，策略原样取自 config.xml | 下载 → 下次打开跑新代码（脚本、DOM、样式三样记号都在，脚本在 load 之前跑完），没有 CSP 拦截 |
+| 对照：同一个更新包，策略去掉 `blob:` | 一个脚本都没跑、应用起不来；下次打开退回安装包，原因写着「CSP 拦了 style-src-elem blob…」 |
+| 电视（Tizen 9.0），装标成 1.1.9 的开发构建、更新源指到开发机 | 开机一分钟 `已下载 1.2.0，下次打开生效（490KB …，160ms）` |
+| 杀掉再开 | `这次跑的是更新 1.2.0（安装包 1.1.9）`，签名桥、登录态、出画面都正常，没有 `csp:` / `onerror` |
+| 再杀再开 | 还是 1.2.0（`Boot.ok()` 清掉了 booting） |
+| 装回正式的 1.2.0 | `下载过的 1.2.0 不比安装包 1.2.0 新，删掉了` |
+| 冷启动第一帧，安装包 vs 更新包 | 安装包 2.5 / 5.7 / 3.3 秒，更新包 3.4 / 5.2 秒 —— 同一个范围，看不出更新包的开销（差别是网络） |
+
+和 bilibili 不同的地方：
+
+- **钥匙是自己的**：私钥 `~/.douyin-tizen-update-key.pem`、口令 `~/.douyin-tizen-update-password`（都 600、都在仓库外），
+  公钥指纹 `1bc5:f76f:620b:998d:0aaf:2bc8:c9d7:3e52`。不和 bilibili 共用：漏了一把，不该两个应用一起开门。**丢了**，以后发更新就得让
+  所有人重装一个换了公钥的包；**泄露了**，谁都能往每台装着它的电视推代码，而这个应用拿着登录好的抖音会话。
+- **不避开播放**：这里一直在播放。manifest 不到 1KB；更新包约 490KB，每个版本只下一次。
+- **没有设置页**：没有开关、没有「现在检查」。第一次跑一个新下载的版本时屏幕正中提示一次「已更新到 x.y.z」（4 秒），
+  这是观众唯一知道更新到了的途径。
+- 启动检查：onload 走完、之后两秒没有 `window.onerror` 才 `Boot.ok()`（`Log.errors()` 数着）。不等第一条视频：断网不是代码坏了。
+- 在电视上测更新：`DOUYIN_UPDATE_MANIFEST=http://<这台电脑>:<端口>/manifest.json zsh tools/deploy.sh` 装一个去那里查的开发构建
+  （只有 REPORT_TO 非空的构建认它）；更新包用 `node tools/update-release.mjs --worktree --base http://<这台电脑>:<端口>/ --out <目录>` 打，
+  `config.xml` 和 `boot.js` 的 `PACKAGED_FALLBACK` 临时改低一档再部署，测完改回、删掉那份测试 manifest。
+
+### 发一版
+
+1. 改 `app/config.xml` 的版本号和 `app/js/boot.js` 的 `PACKAGED_FALLBACK`（要一致，update-verify 卡着），提交。
+2. `node tools/update-release.mjs`（取自 `git archive HEAD`，`app/` 有未提交改动就拒绝），
+   `git add update && git commit -m "更新包 x.y.z" && git tag vx.y.z && git push origin master vx.y.z`
+   —— tag 要一起推：manifest 从 master 取，bundle 从 tag 取。
+3. `zsh tools/release.sh` 出 wgt，`gh release create`。
+4. 规则：改了 boot.js 对更新包的约定，`SHELL` 加一（旧电视跳过那一版，要重装）。**往 `config.xml` 的 CSP 里删 `blob:` 等于关掉自动更新**，
+   而且只在下一次打开时才看得出来。

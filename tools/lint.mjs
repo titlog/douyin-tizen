@@ -15,22 +15,32 @@ const APP = new URL("../app/js/", import.meta.url).pathname;
 
 /* Load order matters: the app is a series of plain scripts sharing globals.
  *
- * Read from index.html rather than listed here. The hand-kept list had silently
+ * Read from what the app actually loads rather than listed here. The hand-kept list had silently
  * fallen two files behind — `selftest.js` and `updater.js` shipped unchecked,
  * which is precisely the gap this tool exists to close: a call to something
  * that does not exist parses fine and fails only on the sofa. Same lesson as
- * deploy.sh deriving the wgt name from the build instead of hardcoding it. */
+ * deploy.sh deriving the wgt name from the build instead of hardcoding it.
+ *
+ * 2026-10-20 起 index.html 只剩 config.js 和 boot.js 两个标签，其余由 boot.js 按它的 SCRIPTS 写进去
+ * （自动更新，见 CLAUDE.md），所以顺序从那里读。index.html 里多出别的标签也算错：那个文件会加载两次，
+ * 而且不在更新包里。 */
 const INDEX = new URL("../app/index.html", import.meta.url).pathname;
-const ORDER = [...fs.readFileSync(INDEX, "utf8")
+const TAGS = [...fs.readFileSync(INDEX, "utf8")
   .matchAll(/<script\s+src="js\/([^"]+)"><\/script>/g)].map((m) => m[1]);
+if (TAGS.join() !== "config.js,boot.js") {
+  console.error(`✗ index.html 的脚本标签应该只有 config.js、boot.js，现在是 ${TAGS.join("、") || "（没有）"} —— 新脚本加进 boot.js 的 SCRIPTS`);
+  process.exit(1);
+}
+const BOOT_SCRIPTS = /var SCRIPTS = \[([^\]]*)\]/.exec(fs.readFileSync(path.join(APP, "boot.js"), "utf8"));
+const ORDER = ["config.js", "boot.js", ...(BOOT_SCRIPTS ? [...BOOT_SCRIPTS[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [])];
 
-if (!ORDER.length) {
-  console.error("✗ index.html 里没找到任何 js/ 脚本标签 — lint 什么都没检查");
+if (ORDER.length <= 2) {
+  console.error("✗ boot.js 的 SCRIPTS 里没读到任何脚本 — lint 什么都没检查");
   process.exit(1);
 }
 for (const f of ORDER) {
   if (!fs.existsSync(path.join(APP, f))) {
-    console.error(`✗ index.html 引用了 js/${f}，但文件不存在`);
+    console.error(`✗ boot.js 的 SCRIPTS 引用了 js/${f}，但文件不存在`);
     process.exit(1);
   }
 }
@@ -44,7 +54,7 @@ const HOST = [
   "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent", "escape",
   "unescape", "btoa", "atob", "Uint8Array", "Uint8ClampedArray", "ArrayBuffer",
   "DataView", "Promise", "Blob", "Function", "fetch", "performance",
-  "requestAnimationFrame", "PerformanceObserver",
+  "requestAnimationFrame", "PerformanceObserver", "TextEncoder", "TextDecoder",
   "tizen", "webapis",
 ];
 

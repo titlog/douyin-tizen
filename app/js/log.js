@@ -48,9 +48,14 @@ var Log = (function () {
         report("onerror", "未处理的 Promise 异常：" + (r && r.message ? r.message : String(r)) + (r && r.stack ? " | " + String(r.stack).split("\n").slice(1, 3).join(" ").replace(/\s+/g, " ").slice(0, 160) : ""));
     });
 
+    /* 数着给自动更新的启动检查用（app.js 的 onload 末尾）：起来的路上抛过错的启动，不算代码是好的。
+     * Boot.scriptName：更新包的脚本跑在 blob: 地址上，一串 uuid 说不出是哪个文件。 */
+    var errors = 0;
     window.onerror = function (m, src, line) {
-        report("onerror", m + " @" + String(src || "").split("/").pop() + ":" + line);
+        errors++;
+        var file = typeof Boot !== "undefined" ? Boot.scriptName(src) : String(src || "").split("/").pop();
+        report("onerror", m + " @" + file + ":" + line);
     };
 
-    return { report: report };
+    return { report: report, errors: function () { return errors; } };
 })();

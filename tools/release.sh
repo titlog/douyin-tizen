@@ -60,10 +60,13 @@ git show HEAD:app/js/config.js | grep -q '^var REPORT_TO = "";' \
   || { echo "  HEAD 的 config.js 里 REPORT_TO 不是空的 —— 拒绝发布"; exit 1; }
 git show HEAD:app/js/config.js | grep -q '^var SELFTEST = false;' \
   || { echo "  HEAD 的 config.js 里 SELFTEST 不是 false —— 拒绝发布"; exit 1; }
+git show HEAD:app/js/config.js | grep -q '^var UPDATE_MANIFEST = "";' \
+  || { echo "  HEAD 的 config.js 里 UPDATE_MANIFEST 不是空的 —— 拒绝发布"; exit 1; }
 
 echo "== checking =="
 for f in app/js/*.js; do node --check "$f" >/dev/null || { echo "  syntax error in $f"; exit 1; }; done
 node "$ROOT/tools/lint.mjs" >/dev/null || { node "$ROOT/tools/lint.mjs" | grep '✗'; echo "  refuse to release"; exit 1; }
+node "$ROOT/tools/update-verify.mjs" >/dev/null || { node "$ROOT/tools/update-verify.mjs" | grep '✗'; echo "  refuse to release"; exit 1; }
 
 echo "== signing profile =="
 if [ ! -f "$PW_FILE" ]; then
@@ -131,6 +134,8 @@ if not re.search(r'^var REPORT_TO = "";', cfg, re.M):
     problems.append("config.js: REPORT_TO is not empty")
 if not re.search(r'^var SELFTEST = false;', cfg, re.M):
     problems.append("config.js: SELFTEST is not false")
+if not re.search(r'^var UPDATE_MANIFEST = "";', cfg, re.M):
+    problems.append("config.js: UPDATE_MANIFEST is not empty")
 
 def certs(xml):
     for b64 in re.findall(r"<X509Certificate>\s*(.*?)\s*</X509Certificate>", xml, re.S):
@@ -158,7 +163,7 @@ if problems:
     for p in problems:
         print("  !! " + p)
     sys.exit(1)
-print("  %d files, REPORT_TO empty, SELFTEST off, no personal certificate" % len(names - signatures))
+print("  %d files, REPORT_TO empty, SELFTEST off, UPDATE_MANIFEST empty, no personal certificate" % len(names - signatures))
 PY
 
 echo "== done =="
