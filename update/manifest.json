@@ -1,0 +1,4 @@
+{
+ "manifest": "{\"version\":\"1.2.0\",\"shell\":1,\"sha256\":\"b0da634fff048f635752e69fdcaadcdf5a57b0715935b025c82a6f5c56a1dd26\",\"size\":501838,\"date\":\"2026-10-20T20:56:43.581Z\",\"urls\":[\"https://cdn.jsdelivr.net/gh/titlog/douyin-tizen@v1.2.0/update/bundle-1.2.0.json\",\"https://raw.githubusercontent.com/titlog/douyin-tizen/v1.2.0/update/bundle-1.2.0.json\"]}",
+ "sig": "YE8+WzgMqzdo+lO3RhhKzsuI60ZeAG0wtc9QIqKlDRFzRXa4SaLRVsbZcybpiRP12VIarodDW0J9XfN9ntIVsA=="
+}
