@@ -119,6 +119,12 @@ iframe.bridge { position: absolute; left: 0; top: 0; width: 1px; height: 1px; bo
 #qr { width: 400px; height: 400px; image-rendering: pixelated; visibility: hidden; }
 #login-msg { margin-top: 40px; font-size: 32px; min-height: 44px; }
 #empty-msg { margin-top: 440px; font-size: 38px; }
+/* 没登录时「我」的二维码页最底下那一排：诊断日志（js/diag.js），和「我」页顶上那一排一个样子。 */
+#login-diag { position: absolute; left: 0; right: 0; bottom: 110px; font-size: 28px; display: none; }
+#login-diag.show { display: block; }
+#login-diag .t { display: inline-block; margin: 0 13px; padding: 6px 24px; border-radius: 34px; opacity: 0.55; }
+#login-diag .t.focus { background: #fe2c55; opacity: 1; }
+#login-diag-msg { position: absolute; left: 160px; right: 160px; bottom: 50px; font-size: 24px; opacity: 0.6; }
 
 /* 网格页：作者主页、「我」、选集（js/grid.js 按这里的尺寸摆卡片：4 列 398×531（3:4）、间距 36、左边 110、网格从 300 开始，
  * 「我」从 380 开始）。

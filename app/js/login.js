@@ -70,7 +70,7 @@ var Login = (function () {
         var body = d.body ? d.body.innerText.replace(/\s+/g, " ") : "";
         if (body !== lastBody) {
             lastBody = body;
-            Log.report("login", "整页文字：" + body.slice(0, 140));
+            Log.report("login", "整页文字：" + Diag.priv(body.slice(0, 140)));   // 扫码之后这页上可能有昵称
             /* 新设备验证这类我们处理不了的，原样给观众看，让他们在手机上照做。 */
             if (/身份验证|安全验证|验证身份/.test(body)) { cb({phase: "status", msg: body.slice(0, 60)}); }
         }

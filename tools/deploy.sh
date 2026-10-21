@@ -24,6 +24,8 @@ for a in "$@"; do
     --me) SELFTEST='"me"' ;;        # 「我」（观看历史 · 喜欢 · 收藏）、合集选集、评论侧栏；要已登录，只读（约 2 分钟）
     --mix) SELFTEST='"mix"' ;;      # 推荐里找一条带合集的，选集 → 接着放 → 下一集 → 返回两次；只读（约 1–3 分钟）
     --like) SELFTEST='"like"' ;;    # 点赞、收藏各一来一回。没有 ticket guard 头时 Act 不发；2026-10-18 不带头发过一次，服务器作废了登录
+    --diag) SELFTEST='"diag"' ;;    # 诊断日志：「我」里手动传一次、关掉再打开、造一次出事自动传（约 1 分钟）；
+                                    # 传到 DOUYIN_DIAG_TO，默认这台电脑上的 node ../bilibili-tizen/tools/diag-local.mjs（先开着）
   esac
 done
 # 应用 id 从 config.xml 读，不写死 —— bilibili 那边改过一次应用名，安装器推旧包、启动步骤
@@ -53,12 +55,15 @@ for f in "$APP"/js/*.js; do node --check "$f" >/dev/null || { echo "  syntax err
 if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/lint.mjs" >/dev/null || { node "$ROOT/tools/lint.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
 # 自动更新（2026-10-20）：钥匙、版本号、CSP 放不放 blob:、boot.js 每种本地状态下选对代码。
 if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/update-verify.mjs" >/dev/null || { node "$ROOT/tools/update-verify.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
+# 诊断日志（2026-10-21）：去隐私、什么时候传、日志里没包起来的作者名和文案。
+if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/diag-verify.mjs" >/dev/null || { node "$ROOT/tools/diag-verify.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
 
 # 地址、自测开关、更新源只进包，不进仓库：打完包、或者中途任何一步退出，都改回去。
 restore_config() {
   sed -i '' -E 's#^var REPORT_TO = "[^"]*";#var REPORT_TO = "";#' "$APP/js/config.js"
   sed -i '' -E 's#^var SELFTEST = [^;]+;#var SELFTEST = false;#' "$APP/js/config.js"
   sed -i '' -E 's#^var UPDATE_MANIFEST = "[^"]*";#var UPDATE_MANIFEST = "";#' "$APP/js/config.js"
+  sed -i '' -E 's#^var DIAG_TO = "[^"]*";#var DIAG_TO = "";#' "$APP/js/config.js"
 }
 trap restore_config EXIT
 
@@ -71,6 +76,12 @@ echo "  selftest=$SELFTEST"
 if [ -n "$DOUYIN_UPDATE_MANIFEST" ]; then
   sed -i '' -E "s#^var UPDATE_MANIFEST = \"[^\"]*\";#var UPDATE_MANIFEST = \"$DOUYIN_UPDATE_MANIFEST\";#" "$APP/js/config.js"
   echo "  update manifest=$DOUYIN_UPDATE_MANIFEST"
+fi
+# 诊断日志传到哪：开发构建默认不传（有收集器），--diag 默认传到这台电脑上的冒充接收端。
+[ "$SELFTEST" = '"diag"' ] && DOUYIN_DIAG_TO="${DOUYIN_DIAG_TO:-http://$HOST_IP:8097/v1/upload}"
+if [ -n "$DOUYIN_DIAG_TO" ]; then
+  sed -i '' -E "s#^var DIAG_TO = \"[^\"]*\";#var DIAG_TO = \"$DOUYIN_DIAG_TO\";#" "$APP/js/config.js"
+  echo "  diag -> $DOUYIN_DIAG_TO"
 fi
 
 echo "== packaging =="

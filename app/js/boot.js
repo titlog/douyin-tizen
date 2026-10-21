@@ -22,14 +22,14 @@ var Boot = (function () {
     var SHELL = 1;
 
     /* 安装包的版本，给没有 tizen.application 的引擎（桌面浏览器）用。tools/update-verify.mjs 卡着它和 config.xml 一致。 */
-    var PACKAGED_FALLBACK = "1.2.0";
+    var PACKAGED_FALLBACK = "1.2.1";
 
     /* ECDSA P-256 公钥，SPKI，base64。tools/update-key.mjs 写进来；私钥永远不进仓库。 */
     var PUBKEY = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUKhacocdhSpkKUOasXjo74yi1X2jmdxHjSZfslCj59JzSqazwZqDIAdIv7knA16jhfcNi6Px/ylQ2Ylh20rN3g==";
 
     /* 安装包的加载顺序，排在 config.js（它有自己的标签：deploy.sh 改写它）和这个文件之后。
      * tools/lint.mjs 从这里读；更新包带着自己的一份，所以一个版本可以加文件。 */
-    var SCRIPTS = ["log.js", "bridge.js", "feed.js", "account.js", "login.js", "grid.js", "act.js", "comments.js",
+    var SCRIPTS = ["diag.js", "log.js", "bridge.js", "feed.js", "account.js", "login.js", "grid.js", "act.js", "comments.js",
                    "vendor/mp4box.js", "mse.js", "player.js", "update.js", "app.js", "selftest.js", "msespike.js"];
 
     var K_BUNDLE = "dy.update.bundle", K_META = "dy.update.meta",

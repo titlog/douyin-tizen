@@ -122,11 +122,12 @@ iframe 推荐流 第2次 status=200 len=188913 items=2 … | 加上的参数=a_b
 
 ```
 app/
-  js/config.js   REPORT_TO、SELFTEST、UPDATE_MANIFEST（deploy.sh 打包前写入、打包后或中途退出都改回去）
+  js/config.js   REPORT_TO、SELFTEST、UPDATE_MANIFEST、DIAG_TO（deploy.sh 打包前写入、打包后或中途退出都改回去）
   js/boot.js     这次跑哪份代码：安装包的，还是自动更新下载、验过签名的新版本；信任根（公钥），永远不随更新下发。
                  index.html 只剩 config.js、boot.js 两个标签，**新加脚本加进 boot.js 的 SCRIPTS**（lint 从那里读顺序）
   js/update.js   查新版本、下载、验签名、存进 localStorage；本身随更新下发。见「自动更新」
-  js/log.js      上报到 tools/collect.mjs（:8098），令牌桶限速，连败五次睡五分钟
+  js/diag.js     诊断日志：每一行去掉身份记进一圈，出事或手动时传给开发者；接收地址在这里（config.js 不随更新下发）。见「诊断日志」
+  js/log.js      上报到 tools/collect.mjs（:8098），令牌桶限速，连败五次睡五分钟；每一行也交给 diag.js
   js/bridge.js   隐藏 iframe（douyin.com/robots.txt）+ 官网签名 SDK；所有接口经它发（GET/POST）
   js/feed.js     视频流工厂：推荐 / 精选 / 关注各一个实例，前方不足 4 条就补；过滤图文/直播/广告
   js/account.js  登录态（history/read 的 status_code）；自己的资料（profile/self）；退出登录
@@ -145,13 +146,13 @@ app/
 左右键 → 切标签（**暂停时**改为 ∓10 秒），快进 / 快退键 → 任何时候 ±10 秒，返回键按两次退出。
 播完自动下一条。
 **暂停时下键 → 选中下面那一排：作者 · 评论 · 合集**（不再是下一条；频道减键照旧是下一条），左右键换，确认键做，上键 / 返回键取消。
-作者 → 作者主页，合集 → 选集，评论 → 右边的评论侧栏。「我」顶上一排：观看历史 · 喜欢 · 收藏 · 退出登录（退出要按两次确认）。
+作者 → 作者主页，合集 → 选集，评论 → 右边的评论侧栏。「我」顶上一排：观看历史 · 喜欢 · 收藏 · 诊断日志：开 · 上传诊断日志 · 退出登录（退出要按两次确认）；没登录时「我」是二维码，诊断日志那两项在它最底下，下键选中。
 网格页（作者主页、「我」、选集）叠成一摞，返回键一层层退。见下面「作者主页」和「「我」页、合集、评论、点赞」。
 
 ```bash
 node tools/collect.mjs | tee <日志文件>   # 终端 1
 zsh tools/deploy.sh                      # 终端 2；--spike 装可行性探测那个
-zsh tools/deploy.sh --selftest           # 自己派发按键把「刷」走一遍，逐步上报 PASS/FAIL（25 步，约 4 分钟）
+zsh tools/deploy.sh --selftest           # 自己派发按键把「刷」走一遍，逐步上报 PASS/FAIL（26 步，约 4 分钟）
 zsh tools/deploy.sh --author             # 只走作者主页那 7 步，1 分钟
 zsh tools/deploy.sh --grid               # 作者主页网格上下翻，同一轮轮换三种做法比掉帧，2 分钟
 zsh tools/deploy.sh --soak               # 连刷 20 分钟 + 登录页挂 6 分钟，看风控和二维码轮换
@@ -161,6 +162,9 @@ zsh tools/deploy.sh --probe              # 登录态下把「我」、合集、�
 zsh tools/deploy.sh --like               # 点赞、收藏各一来一回 —— 真的写到账号上，只在用户同意时跑
 node tools/update-verify.mjs             # 自动更新离线验证（deploy、release 都卡着它）
 node tools/update-e2e.mjs                # 自动更新在桌面 Chrome 里带着 config.xml 的 CSP 走一遍（不碰抖音）
+zsh tools/deploy.sh --diag               # 诊断日志：「我」里手动传、关掉再开、造一次出事自动传（6 步，1 分钟）；先开 node ../bilibili-tizen/tools/diag-local.mjs
+node tools/diag-verify.mjs               # 诊断日志离线验证：去隐私、什么时候传、源码里没包起来的作者名和文案（deploy、release 都卡着它）
+node ../bilibili-tizen/tools/diag-logs.mjs --app douyin-tizen   # 读别人电视传上来的（--device 编号 / <id>）
 ```
 
 收集器断过（哪怕几秒）要重装一次：`log.js` 连撞五次就睡五分钟，正在跑的自测一个字都报不上来。
@@ -683,3 +687,26 @@ Playwright 的 Chrome 关掉跨域检查，按 `STEPS` 派发按键、截图；`
 3. `zsh tools/release.sh` 出 wgt，`gh release create`。
 4. 规则：改了 boot.js 对更新包的约定，`SHELL` 加一（旧电视跳过那一版，要重装）。**往 `config.xml` 的 CSP 里删 `blob:` 等于关掉自动更新**，
    而且只在下一次打开时才看得出来。
+
+## 诊断日志（2026-10-21，用户要求，照搬 bilibili）
+
+装发布包的电视出了事，开发者这边一个字都看不到（收集器只有开发构建有）。所以 `log.js` 的每一行也交给 `diag.js`，记进一圈
+（600 行 / 16 万字，存在 localStorage，活过重启），**出了观众看得见的事**、或观众在「我」里按「上传诊断日志」时传上去。
+默认开，「我」里能关；关了什么都不记、不存、不传。接收端、限流、保留期和 bilibili 共用一套（bilibili-tizen 的 `server/`，
+按 `app` 分开），设计和测量在那边的 `server/README.md`、`docs/调试与日志.md`。
+
+- **出事** = `trouble(文字)`（提示 + `Diag.incident`）或直接 `Diag.incident`：连不上抖音（签名桥起不来）、一个标签取不到内容 /
+  加载失败、连续五条放不了、扫码之后仍判为未登录、退出登录失败、网格列表 / 评论加载失败、js 错误和没人接的 Promise 异常、
+  更新包被标坏。**新的失败出口用 `trouble()`，不用 `toast()`。** 单独一条放不了、跳下一条不算（太常见）。
+- **往 `Log.report()` 里放作者名、文案、昵称、合集名、页名、登录页上的字，一律包 `Diag.priv()`**：上传时换成「…」，收集器那边
+  照样是原文。`diag-verify` 从源码里查 `Log.report` / `Diag.incident` / `R` / `pushPage` / `trouble` 的参数，卡着 `.desc`、`.author`、
+  `.nickname`、`.title`、`Grid.name()`、`mix.name`、`body.slice`；sec_uid、uid、签名和指纹参数（`a_bogus`、`msToken`、`verifyFp`、
+  `webid`……）、cookie 值由 `scrub()` 兜底，cookie 名字留着（account 那行判登录态要它）。视频 id 留着。
+- **没有设置页**，开关和上传放在「我」：登录了是顶上那一排的两项（底下那行字写说明、这台电视的编号、上次上传的结果），没登录是
+  二维码页最底下那一排（下键选中，左右换，确认做，上键 / 返回键取消；只在「我」的二维码页上，「关注」的没有）。按下去的回答是
+  那行字变了，不弹提示。
+- 开发构建（`REPORT_TO` 非空）不传，除非 `DOUYIN_DIAG_TO`（`--diag` 默认这台电脑的 :8097）；发布包传到 `diag.js` 的 `ENDPOINT`，
+  `release.sh` 卡着它是 https、`DIAG_TO` 是空串。`diag.js` 排在 SCRIPTS 最前（`log.js` 一加载就用它）。
+- 测量（同一天）：电视 `--diag` 6 步全过（手动传、关掉缓冲清空、再开、造一次出事 8 秒后自动传、回推荐接着放），读回传上去的那份：
+  作者名、文案全是「…」，签名参数、sec_uid 一个没有；完整 `--selftest` 26 步全过。电视登录着，二维码页那一排在桌面测试台
+  （Playwright，抖音的请求全拦掉）里走过：签名桥起不来 → 「连不上抖音」自动传了一份，那一排的选中、上传、开关、返回键都对。

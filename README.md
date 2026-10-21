@@ -38,6 +38,8 @@
 - 横屏竖屏都铺好，切换有上推动画；常驻的 MSE 播放管线，换一条 0.2–0.5 秒。
 - 播放和观看历史照官网的方式上报，手机上也看得到。
 - **自动更新**（1.2.0 起）：开着应用时查到新版本就在后台下载，下次打开生效，屏幕上提示「已更新到 x.y.z」。
+- **诊断日志**（1.2.1 起）：出问题时，应用会收集一些排查必要的运行信息传给开发者，不会泄露个人隐私。「我」里可以关掉；
+  报问题时附上那里显示的这台电视的编号。
 
 ## 怎么做到的
 
@@ -135,6 +137,8 @@ no backend, no proxy, no server; the login stays on the set.
   current episode) or the comments (read-only side panel with replies).
 - A resident MSE pipeline: switching videos takes 0.2–0.5 s.
 - Self-update from 1.2.0: a newer signed version is downloaded in the background and runs from the next launch.
+- Diagnostic logs from 1.2.1: when something goes wrong, the app sends the developer the information needed to find out why,
+  and nothing that identifies you. It can be switched off under 我 ("me"); when reporting a problem, quote the TV's code shown there.
 
 Douyin's web API wants an `a_bogus` signature that only the site's own SDK, running on `www.douyin.com`, produces
 correctly. A Tizen web widget can script a `www.douyin.com` iframe, so the official SDK signs requests in a hidden

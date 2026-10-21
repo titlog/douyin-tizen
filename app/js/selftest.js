@@ -284,6 +284,8 @@
                 } else {
                     check("未登录时「我」出二维码", window.__app.tab() === "me" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
                 }
+                var row = logged ? document.getElementById("gp-tabs").textContent : (document.getElementById("login-diag").className === "show" ? document.getElementById("login-diag").textContent : "");
+                check("「我」里有诊断日志的开关和上传", /诊断日志：[开关]/.test(row) && row.indexOf("上传诊断日志") >= 0, "那一排：" + row);
                 key(KEY.LEFT);                       // 回推荐：管线只是暂停着（Player.stop），该是原地接着放
                 return waitShown("", 15000).then(function (ms) {
                     var s1 = st();
@@ -380,6 +382,85 @@
             var q = document.getElementById("qr");
             check("「我」的二维码真的显示出来", ms >= 0, "等了 " + ms + "ms，naturalWidth=" + (q ? q.naturalWidth : "-") + " complete=" + (q ? q.complete : "-"));
             Log.report("SELFTEST", fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）");
+        });
+    }
+
+    /* --diag：诊断日志的上传在电视上走一遍 —— 观众在「我」里按的那一下，和出事时自动的那一下，传到 DOUYIN_DIAG_TO
+     * （默认是这台电脑上的 bilibili-tizen/tools/diag-local.mjs）。开关关掉再打开，最后放回原样。登录了走「我」页顶上那一排，
+     * 没登录走二维码页最底下那一排。 */
+    function diagRun() {
+        var logged, wasOn = Diag.enabled(), manualId = "";
+        function line() {
+            return logged ? (Grid.state() || {}).foot || "" : document.getElementById("login-diag-msg").textContent;
+        }
+        function at() { return logged ? Grid.tabKey() : ["", "diag", "diagup"][window.__app.loginDiag() + 1]; }
+        function until(test, ms) {
+            var t0 = Date.now();
+            function poll() {
+                var v = test();
+                if (v) { return Promise.resolve(v); }
+                if (Date.now() - t0 > ms) { return Promise.resolve(null); }
+                return wait(300).then(poll);
+            }
+            return poll();
+        }
+        return waitShown("", 40000).then(function () {
+            return until(function () { return Account.known(); }, 20000);     // 登录态查清楚之前「我」是转圈
+        }).then(function () {
+            if (!wasOn) { Diag.setEnabled(true); }
+            logged = Account.loggedIn();
+            key(KEY.RIGHT);                          // 推荐右边就是「我」
+            return wait(2000);
+        }).then(function () {
+            if (logged) { key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT); }     // 观看历史 → 喜欢 → 收藏 → 诊断日志
+            else { key(KEY.DOWN); }
+            return wait(500);
+        }).then(function () {
+            var st = Diag.status();
+            check("「我」里选中诊断日志，写着这台电视的编号", at() === "diag" && line().indexOf("这台电视的编号 " + st.device) >= 0 && st.configured,
+                  (logged ? "「我」页" : "二维码页") + "，选中 " + at() + "，那行字：" + line() + (st.configured ? "" : "（这个构建没有接收地址：deploy.sh --diag 应该写进了 DIAG_TO）"));
+            key(KEY.RIGHT);
+            return wait(300);
+        }).then(function () {
+            key(KEY.ENTER);
+            return until(function () {
+                var m = /已上传（编号 ([a-z2-9]{8})）/.exec(line());
+                return m ? m[1] : /没传上/.test(line()) ? "×" : null;
+            }, 25000);
+        }).then(function (id) {
+            check("按「上传诊断日志」，那行字写出编号", at() === "diagup" && id && id !== "×", "那行字：" + line());
+            manualId = id || "";
+            key(KEY.LEFT);
+            return wait(300);
+        }).then(function () {
+            key(KEY.ENTER);
+            return wait(300);
+        }).then(function () {
+            var name = logged ? document.getElementById("gp-tabs").textContent : document.getElementById("ld-toggle").textContent;
+            check("关掉：不记录、缓冲清空", !Diag.enabled() && line().indexOf("已关闭") === 0 && Diag.status().lines === 0 && name.indexOf("诊断日志：关") >= 0,
+                  "enabled=" + Diag.enabled() + "，缓冲 " + Diag.status().lines + " 行，那行字：" + line());
+            key(KEY.ENTER);
+            return wait(300);
+        }).then(function () {
+            check("再打开", Diag.enabled() && line().indexOf("这台电视的编号") >= 0, "那行字：" + line());
+            /* 三分钟内自动传过一份的话（上一轮 --diag），这一次会被限流挡掉 —— 自测构建里把那个时间清掉。 */
+            try { var sent = JSON.parse(localStorage.getItem("dy.diag.sent") || "{}"); sent.at = 0; localStorage.setItem("dy.diag.sent", JSON.stringify(sent)); } catch (e) {}
+            Diag.incident("自测：造的一次出事");
+            return until(function () {
+                var last = Diag.status().last || {};
+                return !last.manual && (last.id || last.ok === false) ? last : null;
+            }, 30000);
+        }).then(function (last) {
+            check("出一次事，8 秒后自动上传", last && last.ok && last.id !== manualId, last ? (last.ok ? "编号 " + last.id : "没传上：" + last.why) : "30 秒了还没有结果");
+            if (Diag.enabled() !== wasOn) { Diag.setEnabled(wasOn); }
+            if (logged) { key(KEY.LEFT); key(KEY.LEFT); key(KEY.LEFT); key(KEY.LEFT); }   // 退到观看历史，再左键回推荐
+            else { key(KEY.UP); key(KEY.LEFT); }
+            return waitShown("", 15000);
+        }).then(function (ms) {
+            check("回到推荐接着放", window.__app.tab() === "recommend" && ms >= 0, "标签 " + window.__app.tab() + "，出画面 " + ms + "ms");
+            Log.report("SELFTEST", fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）");
+        }, function (e) {
+            Log.report("SELFTEST", "中止：" + e.message + "（" + fails + "/" + steps + " 步失败）");
         });
     }
 
@@ -973,7 +1054,7 @@
         }).then(function () { R("结束"); }, function (e) { R("中止：" + e.message); });
     }
 
-    var MODES = {soak: soak, qr: qrOnly, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
+    var MODES = {soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
     if (SELFTEST === "mse") { return; }                 // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();

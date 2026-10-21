@@ -44,6 +44,7 @@
     var backAt = 0;
     var logoutAt = 0;
     var loginFor = "";        // 登录是从哪个标签发起的，成功后回到那里
+    var loginDiag = -1;       // 「我」的二维码页最底下那一排选中了哪一项（0 诊断日志开关、1 上传），-1 没选中
     /* 叠起来的网格页（作者主页、「我」、选集）：{page, feed, play, resume, at, root}。最上面那一页要么在显示网格（play=false，
      * view "grid"），要么在放它的视频（play=true，view "feed"，feed() 是它的）。从放着的视频里再打开一页就往上叠一层，
      * 下面那一层记着放到了哪（at）；返回键一层层退。「我」是标签自己的页（root），退不掉。 */
@@ -101,6 +102,11 @@
         t.className = "show";
         clearTimeout(toast.timer);
         toast.timer = setTimeout(function () { t.className = ""; }, ms || 2000);
+    }
+    /* 观众看得见的失败：提示，同时把最近的日志传给开发者（diag.js），理由就是这句话。新的失败出口用它，不用 toast()。 */
+    function trouble(msg, ms) {
+        toast(msg, ms);
+        Diag.incident(msg);
     }
 
     /* 信息层（作者、标题、进度）每次换视频都出来；标签栏只在切标签、暂停时出来 —— 上下刷的
@@ -431,8 +437,8 @@
             busy = false;
             if (tab !== myTab || view !== "feed" || feed() !== f) { return; }   // 等的时候观众切走了（或进出了网格页）
             $("loading").className = "";
-            Log.report("播放", f.name + " #" + f.position() + " " + cause + " " + item.id + " " + (item.author || "") + " " +
-                       item.desc.slice(0, 20) + " " + item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s" + age(item) +
+            Log.report("播放", f.name + " #" + f.position() + " " + cause + " " + item.id + " " + Diag.priv(item.author || "") + " " +
+                       Diag.priv(item.desc.slice(0, 20)) + " " + item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s" + age(item) +
                        (item.mix ? " 合集第 " + item.mix.ep + " 集" : ""));
             show(item, 0, cause === "下键" || cause === "播完" ? "up" : "");
         }, function (e) {
@@ -448,8 +454,9 @@
                 $("empty-msg").textContent = f.kind === "follow" ? "你关注的人最近没有新视频" : "这里暂时没有内容（" + e.message + "）";
                 Player.stop();
                 setView("empty");
+                Diag.incident(f.name + "取不到内容：" + e.message);
             } else {
-                toast(f.name + "加载失败，按下键重试", 4000);
+                trouble(f.name + "加载失败，按下键重试", 4000);
             }
         });
     }
@@ -493,13 +500,13 @@
         var it = feed().current(), e = topPage();
         if (!it || !it.secUid) { toast("这一条缺作者信息，换一条再试"); return; }
         if (e && e.page.kind === "author" && e.page.secUid === it.secUid) { backToGrid(); return; }   // 放的本来就是 TA 的作品
-        pushPage(Grid.author(it), "进入 @" + it.author + " 的主页");
+        pushPage(Grid.author(it), "进入 @" + Diag.priv(it.author) + " 的主页");
     }
 
     function openMix() {
         var it = feed().current(), e = topPage();
         if (e && e.page.kind === "mix" && e.page.mixId === it.mix.id) { backToGrid(); return; }       // 放的本来就是这个合集
-        pushPage(Grid.mix(it), "打开合集《" + it.mix.name + "》第 " + it.mix.ep + " 集");
+        pushPage(Grid.mix(it), "打开合集《" + Diag.priv(it.mix.name) + "》第 " + it.mix.ep + " 集");
     }
 
     /* 网格上按确认：从这一条开始放这一页的视频。刚才放过、退回网格的那一条接着放。 */
@@ -512,7 +519,7 @@
         var at = e.resume && e.resume.id === it.id ? e.resume.t : 0;
         e.feed = f;
         e.play = true;
-        Log.report("播放", where() + (e.page.tabs ? "·" + Grid.tabKey() : "") + " #" + i + " 网格点选 " + it.id + " " + it.desc.slice(0, 20) + " " + it.w + "x" + it.h + " " +
+        Log.report("播放", where() + (e.page.tabs ? "·" + Grid.tabKey() : "") + " #" + i + " 网格点选 " + it.id + " " + Diag.priv(it.desc.slice(0, 20)) + " " + it.w + "x" + it.h + " " +
                    Math.round(it.dur / 1000) + "s" + age(it) + (it.mix ? " 合集第 " + it.mix.ep + " 集" : "") + (at ? " 接着 " + at.toFixed(1) + "s" : ""));
         setView("feed");
         markTabs();
@@ -536,7 +543,7 @@
     /* 网格上按返回：退掉这一页，回到下面那一层接着放（下面没有了就是标签自己的视频流）。 */
     function popPage() {
         var e = pages.pop();
-        Log.report("页面", "离开" + KIND_NAME[e.page.kind] + "「" + Grid.name() + "」");
+        Log.report("页面", "离开" + KIND_NAME[e.page.kind] + "「" + Diag.priv(Grid.name()) + "」");
         Grid.close();
         var below = topPage();
         if (!below) { enterTab(tab, "从" + KIND_NAME[e.page.kind] + "返回"); return; }   // 接着原来那一条（进来时记了 resumeAt）
@@ -564,6 +571,7 @@
                 if (view !== "login") { return; }
                 if (!st.loggedIn) {
                     Log.report("login", "框跳到了 robots.txt，但 query/user 仍然判为未登录");
+                    Diag.incident("扫码之后仍然判为未登录");
                     $("login-msg").textContent = "登录好像没有成功，3 秒后换一张二维码";
                     setTimeout(function () { if (view === "login") { startLogin(); } }, 3000);
                     return;
@@ -588,13 +596,55 @@
         setView("login");
         $("login-title").textContent = title;
         loginFor = TABS[tab].key;
+        loginDiag = -1;
+        $("login-diag").className = loginFor === "me" ? "show" : "";
+        paintLoginDiag();
         startLogin();
     }
+
+    // ---------- 诊断日志（diag.js）：「我」页顶上那一排的两项，没登录时是二维码页最底下那一排，同一套字 ----------
+
+    /* 按下去的回答是这行字变了，不弹提示。编号是到 GitHub 报问题时要附上的。 */
+    function diagLine(k) {
+        var st = Diag.status();
+        if (!st.enabled) { return k === "diagup" ? "诊断日志关着，先把它打开" : "已关闭：什么都不记录，也不上传 · 确认键打开"; }
+        var parts = [k === "diagup" ? "确认键把最近的运行日志传给开发者" : "出问题时把排查需要的运行信息传给开发者，不含个人隐私 · 确认键关掉",
+                     "这台电视的编号 " + st.device];
+        if (!st.configured) { parts.push("这个版本没有接收地址，不会上传"); }
+        if (st.sending) { parts.push("正在上传…"); }
+        else if (st.last) {
+            parts.push(new Date(st.last.at).toTimeString().slice(0, 5) + (st.last.ok ? " 已上传（编号 " + st.last.id + "）" : " 没传上：" + st.last.why));
+        }
+        return parts.join(" · ");
+    }
+    var DIAG_UI = {
+        name: function () { return "诊断日志：" + (Diag.enabled() ? "开" : "关"); },
+        line: diagLine
+    };
+    function diagPress(k, repaint) {
+        if (k === "diag") {
+            Diag.setEnabled(!Diag.enabled());
+            Log.report("diag", "诊断日志=" + (Diag.enabled() ? "开" : "关"));
+        } else if (Diag.enabled()) {
+            Diag.upload(repaint);
+        }
+        repaint();
+    }
+    function repaintGridDiag() {
+        if (view === "grid" && Grid.zone() === "tabs" && /^diag/.test(Grid.tabKey())) { Grid.refresh(); }
+    }
+    function paintLoginDiag() {
+        $("ld-toggle").textContent = DIAG_UI.name();
+        $("ld-toggle").className = "t" + (loginDiag === 0 ? " focus" : "");
+        $("ld-upload").className = "t" + (loginDiag === 1 ? " focus" : "");
+        $("login-diag-msg").textContent = loginDiag < 0 ? "下键选中" : diagLine(loginDiag ? "diagup" : "diag");
+    }
+    function repaintLoginDiag() { if (view === "login") { paintLoginDiag(); } }
 
     /* 「我」：每次进这个标签都重新取（看过的、刚赞的要在里面），焦点先在顶上那一排的「观看历史」。 */
     function showMe() {
         Player.stop();
-        pages = [{page: Grid.me(), feed: null, play: false, resume: null, at: 0, root: true}];
+        pages = [{page: Grid.me(DIAG_UI), feed: null, play: false, resume: null, at: 0, root: true}];
         setView("grid");
         Grid.open(pages[0].page);
     }
@@ -670,7 +720,7 @@
             Feed.clearCache();
             makeFeeds();
             enterTab(indexOf("me"), "退出登录");
-        }, function (err) { Grid.say("退出失败：" + err.message); });
+        }, function (err) { Grid.say("退出失败：" + err.message); Diag.incident("退出登录失败：" + err.message); });
     }
 
     function exitPrompt() {
@@ -744,10 +794,10 @@
         if (view !== "feed") { return; }
         errorsInRow++;
         var it = feed().current();
-        Log.report("播放", "放不了（" + why + "），连续第 " + errorsInRow + " 条 | " + (it ? it.id + " " + it.desc.slice(0, 16) : ""));
+        Log.report("播放", "放不了（" + why + "），连续第 " + errorsInRow + " 条 | " + (it ? it.id + " " + Diag.priv(it.desc.slice(0, 16)) : ""));
         if (errorsInRow >= 5) {
             Player.stop();
-            toast("连续好几条都放不了，可能是网络问题。按下键重试", 8000);
+            trouble("连续好几条都放不了，可能是网络问题。按下键重试", 8000);
             errorsInRow = 0;
             return;
         }
@@ -763,6 +813,7 @@
             var e0 = topPage();
             if (Comments.isOpen()) { closeComments(); }
             else if (chip >= 0) { setChip(-1); }
+            else if (view === "login" && loginDiag >= 0) { loginDiag = -1; paintLoginDiag(); }
             else if (view === "feed" && e0 && e0.play) { backToGrid(); }
             else if (view === "grid" && !e0.root) { popPage(); }
             else if (view === "grid" && Grid.zone() === "grid" && e0.page.tabs) { Grid.toTabs(); }
@@ -776,10 +827,27 @@
             else if (k === KEY.UP) { Grid.move(0, -1); }
             else if (k === KEY.DOWN) { Grid.move(0, 1); }
             else if (k === KEY.ENTER || k === KEY.PLAY || k === KEY.PLAY_PAUSE) {
-                if (Grid.zone() === "tabs") { if (Grid.tabKey() === "logout") { logoutPress(); } else { Grid.move(0, 1); } }
+                if (Grid.zone() === "tabs") {
+                    var tk = Grid.tabKey();
+                    if (tk === "logout") { logoutPress(); }
+                    else if (tk === "diag" || tk === "diagup") { diagPress(tk, repaintGridDiag); }
+                    else { Grid.move(0, 1); }
+                }
                 else { playFromGrid(); }
             }
             else { return; }
+            e.preventDefault();
+            return;
+        }
+        /* 「我」的二维码页：下键选中最底下那一排（诊断日志），选中时左右键在里面换、确认键做、上键 / 返回键取消。 */
+        if (view === "login" && loginFor === "me" && (loginDiag >= 0 || k === KEY.DOWN)) {
+            if (k === KEY.DOWN) { loginDiag = Math.max(loginDiag, 0); }
+            else if (k === KEY.LEFT) { loginDiag = 0; }
+            else if (k === KEY.RIGHT) { loginDiag = 1; }
+            else if (k === KEY.UP) { loginDiag = -1; }
+            else if (k === KEY.ENTER) { diagPress(loginDiag ? "diagup" : "diag", repaintLoginDiag); }
+            else { return; }
+            paintLoginDiag();
             e.preventDefault();
             return;
         }
@@ -853,6 +921,7 @@
     }
 
     window.onload = function () {
+        Diag.init({ report: Log.report });
         Log.report("engine", navigator.userAgent);
         /* 服务器还推不推看过的：这些天的累计（见 feed.js 的 watchedReport）。 */
         Log.report("看过", Feed.watchedReport());
@@ -874,7 +943,7 @@
             bootMarks.bridge = Date.now() - bootAt;
         }, function (e) {
             Log.report("bridge", "起不来：" + e.message);
-            toast("连不上抖音：" + e.message, 15000);
+            trouble("连不上抖音：" + e.message, 15000);
         }).then(function () {
             /* 桥失败时 check 也会把登录态标成「已知」，等它的标签不会一直等。 */
             return Account.check("启动");
@@ -895,6 +964,11 @@
             try { Update.init({ report: Log.report, notice: function (t) { toast(t, 4000); } }); }
             catch (e) { Log.report("update", "Update.init 抛异常：" + (e && e.message)); }
         }
+        /* 这次启动 boot.js 扔掉了一个走不到首页的更新包。观众什么都看不到（照常跑安装包），开发者只能从这里知道。 */
+        try {
+            var bootNote = Boot.info().note || "";
+            if (/标坏|选代码时出错/.test(bootNote)) { Diag.incident("更新包启动失败：" + bootNote); }
+        } catch (e) {}
         /* 这次启动的代码是好的：onload 走完、之后两秒没有一个 js 错误。boot.js 见到这句才清掉 booting；
          * 没说这句的启动，下次打开把它跑的那个更新标坏、改跑安装包。不等第一条视频 —— 断网时视频出不来，
          * 那不是代码坏了，不该为此扔掉一个好版本。跑的是安装包时无害。 */
@@ -922,6 +996,8 @@
         current: current,
         /* 自测 --ab 用：轮换切换方式、读每次切换的计时。 */
         setPush: function (m) { PUSH_MODE = m; },
-        records: function () { return records; }
+        records: function () { return records; },
+        /* 自测 --diag 用：二维码页最底下那一排选中了哪一项。 */
+        loginDiag: function () { return loginDiag; }
     };
 })();

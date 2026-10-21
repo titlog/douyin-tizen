@@ -1,7 +1,7 @@
 /* 网格页：上面是头部（头像、名字、一行数字、一段说明），下面是 3:4 竖卡片的网格，遥控器上下左右选，确认键从这一条开始放
  * （放着的时候上下键在这一页的视频里刷）。三种页共用这一套（2026-10-18 从作者主页抽出来）：
  *   作者主页  暂停时选中作者、确认键进来（2026-09-30 用户要求）
- *   「我」    顶上一排：观看历史 · 喜欢 · 收藏 · 退出登录，每排一个网格（2026-10-18）
+ *   「我」    顶上一排：观看历史 · 喜欢 · 收藏 · 诊断日志 · 上传诊断日志 · 退出登录，前三排各一个网格（2026-10-18）
  *   合集      暂停时选中「合集」、确认键进来：选集，焦点落在正在看的那一集（2026-10-18）
  * 页和页之间怎么走（一摞页，返回键一层层退）在 app.js，这里只管一页画什么、焦点在哪。
  *
@@ -45,11 +45,12 @@ var Grid = (function () {
     /* 一页。tabs 只有「我」有：顶上一排，焦点在那一排时 zone 是 "tabs"。每一排各一个视频流（feeds[key]，第一次切过去才建）。
      *   playName / backName：放这一页的视频时顶上那行写什么（「@谁 的作品 · 返回键回到 TA 的主页」）
      *   label(it)：卡片左下角那行（默认点赞数；合集写第几集）
+     *   tabName(t)：顶上那一排这一项现在写什么（默认 t.name；「诊断日志：开 / 关」跟着开关变）
      *   want：打开时焦点要落在哪一条（合集：正在看的那一集），没取到就接着往后取 */
     function make(kind, o) {
         return {kind: kind, title: o.title || "", avatar: o.avatar || "", stats: o.stats || "", sign: o.sign || "",
                 top: o.tabs ? 380 : 300, tabs: o.tabs || null, tab: 0, zone: o.tabs ? "tabs" : "grid", feeds: {},
-                makeFeed: o.makeFeed, label: o.label || null, empty: o.empty || null, foot: o.foot || null,
+                makeFeed: o.makeFeed, label: o.label || null, empty: o.empty || null, foot: o.foot || null, tabName: o.tabName || null,
                 playName: o.playName || "", backName: o.backName || "", want: o.want || "", wantTries: 0,
                 sel: 0, on: -1, offset: 0, cards: [], loading: false, err: ""};
     }
@@ -83,7 +84,7 @@ var Grid = (function () {
         var p = cur, html = "";
         if (!p.tabs) { $("gp-tabs").innerHTML = ""; return; }
         for (var i = 0; i < p.tabs.length; i++) {
-            html += "<span class=\"t" + (i === p.tab ? " on" : "") + (i === p.tab && p.zone === "tabs" ? " focus" : "") + "\">" + p.tabs[i].name + "</span>";
+            html += "<span class=\"t" + (i === p.tab ? " on" : "") + (i === p.tab && p.zone === "tabs" ? " focus" : "") + "\">" + (p.tabName ? p.tabName(p.tabs[i]) : p.tabs[i].name) + "</span>";
         }
         $("gp-tabs").innerHTML = "<div class=\"in\">" + html + "</div>";
         var inner = $("gp-tabs").firstChild, on = inner.childNodes[p.tab];
@@ -135,6 +136,7 @@ var Grid = (function () {
             if (cur !== me || key(me) !== k) { return; }
             me.err = e.message;
             Log.report("网格", me.kind + (me.tabs ? "·" + k : "") + " 列表取不到（" + (Date.now() - t0) + "ms）：" + e.message);
+            Diag.incident(({author: "作者主页", me: "「我」", mix: "选集"}[me.kind] || me.kind) + (me.tabs ? "·" + me.tabs[me.tab].name : "") + "列表加载失败：" + e.message);
             draw();
         });
     }
@@ -310,7 +312,7 @@ var Grid = (function () {
             profile_other_record_enable: "1", land_to: "1"
         }).then(function (j) {
             var u = j.user || {};
-            Log.report("作者", "资料 " + (Date.now() - t0) + "ms status_code=" + j.status_code + " @" + u.nickname + " 粉丝 " + u.follower_count +
+            Log.report("作者", "资料 " + (Date.now() - t0) + "ms status_code=" + j.status_code + " @" + Diag.priv(u.nickname) + " 粉丝 " + u.follower_count +
                        " 获赞 " + u.total_favorited + " 作品 " + u.aweme_count);
             if (!u.nickname) { return; }
             header(p, {title: u.nickname, playName: "@" + u.nickname + " 的作品", sign: u.signature || "",
@@ -321,11 +323,14 @@ var Grid = (function () {
         return p;
     }
 
-    /* 「我」：顶上一排观看历史 · 喜欢 · 收藏 · 退出登录。「喜欢」要自己的 sec_uid，资料回来之前那一排写「正在加载」。 */
-    var ME_TABS = [{key: "history", name: "观看历史"}, {key: "like", name: "喜欢"}, {key: "collect", name: "收藏"}, {key: "logout", name: "退出登录"}];
-    function me() {
+    /* 「我」：顶上一排观看历史 · 喜欢 · 收藏 · 诊断日志 · 上传诊断日志 · 退出登录。「喜欢」要自己的 sec_uid，资料回来之前那一排写
+     * 「正在加载」。诊断日志那两项没有网格，底下那行字是 diag.line(key)，名字是 diag.name()（app.js 给，二维码页用同一套字）。 */
+    var ME_TABS = [{key: "history", name: "观看历史"}, {key: "like", name: "喜欢"}, {key: "collect", name: "收藏"},
+                   {key: "diag", name: "诊断日志"}, {key: "diagup", name: "上传诊断日志"}, {key: "logout", name: "退出登录"}];
+    function me(diag) {
         var p = make("me", {
             title: "我", tabs: ME_TABS, backName: "列表",
+            tabName: function (t) { return t.key === "diag" && diag ? diag.name() : t.name; },
             makeFeed: function (k) {
                 if (k === "history" || k === "collect") { return Feed.create(k); }
                 if (k === "like" && p.secUid) { return Feed.create("like", {secUid: p.secUid}); }
@@ -333,6 +338,7 @@ var Grid = (function () {
             },
             empty: function (k, f) {
                 if (k === "logout") { return "按确认键退出登录（要按两次）"; }
+                if ((k === "diag" || k === "diagup") && diag) { return diag.line(k); }
                 if (k === "like" && !f) { return p.profileErr ? "取不到你的账号信息（" + p.profileErr + "）" : "正在加载…"; }
                 return {history: "还没有观看历史", like: "还没有点过赞的视频", collect: "还没有收藏的视频"}[k] || "这里是空的";
             }
@@ -340,7 +346,7 @@ var Grid = (function () {
         var t0 = Date.now();
         Account.profile().then(function (u) {
             p.secUid = u.sec_uid;
-            Log.report("我", "资料 " + (Date.now() - t0) + "ms 喜欢 " + u.favoriting_count + " 作品 " + u.aweme_count);
+            Log.report("我", "资料 " + (Date.now() - t0) + "ms " + Diag.priv("喜欢 " + u.favoriting_count + " 作品 " + u.aweme_count));   // 账号自己的数字也不出门
             header(p, {title: u.nickname || "我", avatar: first(u.avatar_300x300) || first(u.avatar_thumb) || undefined,
                        stats: "获赞 " + count(u.total_favorited) + "　　关注 " + count(u.following_count) + "　　粉丝 " + count(u.follower_count) +
                               "　　喜欢 " + count(u.favoriting_count)});
@@ -411,6 +417,8 @@ var Grid = (function () {
         zone: function () { return cur ? cur.zone : ""; },
         tabKey: function () { return cur ? key(cur) : ""; },
         toTabs: function () { if (cur && cur.tabs) { cur.zone = "tabs"; focus(false); } },
+        /* 顶上那一排和底下那行字照现在的状态重画（诊断日志开关、上传完了）。 */
+        refresh: function () { if (cur) { drawTabs(); draw(); } },
         /* 底下那行字临时换一句（退出登录的「再按一次」）。 */
         say: function (msg) { $("gp-foot").textContent = msg; },
         /* 自测 --cold：直接把焦点放到第 i 张。 */

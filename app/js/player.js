@@ -124,7 +124,7 @@ var Player = (function () {
                      "元数据 " + (marks.loadedmetadata || "?") + " 首帧数据 " + (marks.loadeddata || "?") + " 可播 " + (marks.canplay || "?");
         var dims = engine === "mse" ? mseE.vw + "x" + mseE.vh : el.videoWidth + "x" + el.videoHeight;
         Log.report("到画面", (Date.now() - switchAt) + "ms（" + detail + "）" + (playNote ? playNote + " " : "") + "预热=" + usedWarm +
-                   (fellBack ? "（最终地址失败，退回跳转接口）" : "") + " " + dims + " | " + (item.author || "") + " " + item.desc.slice(0, 16));
+                   (fellBack ? "（最终地址失败，退回跳转接口）" : "") + " " + dims + " | " + Diag.priv(item.author || "") + " " + Diag.priv(item.desc.slice(0, 16)));
         if (handlers.playing) { handlers.playing(item); }
         /* playing 不等于画面已经上屏：撤封面要等解码器真的在出帧。**requestVideoFrameCallback
          * 在这台电视上从不回调**（2026-09-29 设备实测：21 次全是 1 秒兜底 —— 视频走硬件视频层，
@@ -155,7 +155,7 @@ var Player = (function () {
             /* 用的是预热拿到的最终地址、而且还没出过画面：可能是签名过期，退回跳转接口一次。 */
             if (!told && !fellBack && el.src.indexOf("/aweme/v1/play/") < 0) {
                 fellBack = true;
-                Log.report("播放", "最终地址失败 code=" + code + "，退回跳转接口 | " + item.desc.slice(0, 16));
+                Log.report("播放", "最终地址失败 code=" + code + "，退回跳转接口 | " + Diag.priv(item.desc.slice(0, 16)));
                 start(item.url);
                 return;
             }
@@ -176,7 +176,7 @@ var Player = (function () {
         if (!it) { return; }
         mseFails++;
         if (mseFails >= 3) { mseOff = why; }
-        Log.report("播放", "MSE 管线坏了（" + why + "），第 " + mseFails + " 次，" + (mseOff ? "这次会话改走 src" : "重建后接着放") + " | " + it.desc.slice(0, 16));
+        Log.report("播放", "MSE 管线坏了（" + why + "），第 " + mseFails + " 次，" + (mseOff ? "这次会话改走 src" : "重建后接着放") + " | " + Diag.priv(it.desc.slice(0, 16)));
         play(it, note + "·重建", t);
     }
 
@@ -228,11 +228,11 @@ var Player = (function () {
         }, function (err) {
             if (g !== gen) { return; }
             if (err.unusable) {
-                Log.report("播放", "这条改走 src（" + err.message + "）| " + it.desc.slice(0, 16));
+                Log.report("播放", "这条改走 src（" + err.message + "）| " + Diag.priv(it.desc.slice(0, 16)));
                 playSrc(it, startAt);
                 return;
             }
-            Log.report("播放", "MSE 备不好这条：" + err.message + " | " + it.desc.slice(0, 16));
+            Log.report("播放", "MSE 备不好这条：" + err.message + " | " + Diag.priv(it.desc.slice(0, 16)));
             if (handlers.error) { handlers.error("MSE：" + err.message); }
         });
     }
@@ -370,7 +370,7 @@ var Player = (function () {
                     y.send();
                 } else {
                     w.state = "失败（HTTP " + x.status + "）";
-                    Log.report("预热", "失败 HTTP " + x.status + " | " + it.desc.slice(0, 16));
+                    Log.report("预热", "失败 HTTP " + x.status + " | " + Diag.priv(it.desc.slice(0, 16)));
                 }
             };
             x.onerror = x.ontimeout = function () { if (w.state === "在途") { w.state = "失败（连接）"; } };

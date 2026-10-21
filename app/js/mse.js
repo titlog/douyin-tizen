@@ -125,7 +125,7 @@ var Mse = (function () {
                     return;
                 }
                 if ((x.status === 403 || x.status === 404) && !retried && url !== e.item.url) {
-                    R("CDN 地址 HTTP " + x.status + "，回跳转接口重新拿 | " + e.item.desc.slice(0, 12));
+                    R("CDN 地址 HTTP " + x.status + "，回跳转接口重新拿 | " + Diag.priv(e.item.desc.slice(0, 12)));
                     get(e, e.item.url, from, to, true).then(function (r) { e.url = r.url; ok(r); }, fail);
                     return;
                 }
@@ -436,11 +436,11 @@ var Mse = (function () {
               "，转封装 " + e.remuxMs + "ms，共 " + e.prepMs + "ms" + (e.now ? "（现取）" : "") +
               (e.firstGet ? "，第一段 首字节 " + e.firstGet.ttfb + "ms 共 " + e.firstGet.ms + "ms " + e.firstGet.host : "") +
               " | " + gopStat(keysOf(e)) + " | 槽里 " + slotRanges(e) +
-              (e.replays ? "，重放 " + e.replays + " 次 " + mb(e.replayBytes) : "") + " | " + item.desc.slice(0, 12));
+              (e.replays ? "，重放 " + e.replays + " 次 " + mb(e.replayBytes) : "") + " | " + Diag.priv(item.desc.slice(0, 12)));
             return e;
         });
         e.ready.catch(function (err) {
-            if (err.unusable) { bad[item.id] = err.message; R("这条放不了：" + err.message + " | " + item.desc.slice(0, 12)); }
+            if (err.unusable) { bad[item.id] = err.message; R("这条放不了：" + err.message + " | " + Diag.priv(item.desc.slice(0, 12))); }
             if (!e.dead) { drop(e); }
         });
         return e.ready;
@@ -481,7 +481,7 @@ var Mse = (function () {
         }, function (err) {
             if (g !== e.gen || e.dead || err.aborted) { return; }
             e.netFails = (e.netFails || 0) + 1;
-            R("续取失败（" + err.message + "）第 " + e.netFails + " 次 | " + e.item.desc.slice(0, 12));
+            R("续取失败（" + err.message + "）第 " + e.netFails + " 次 | " + Diag.priv(e.item.desc.slice(0, 12)));
             /* 连续三次就放弃这一条（交给 app 跳下一条），直到下一次 resync（跳转、切回来）才再试 ——
              * 心跳每 250ms 叫一次 pumpNet，不设这道闸就是无限重试、每次都报一遍错。 */
             if (e.netFails >= 3) { e.gaveUp = true; if (handlers.error) { handlers.error("续取连续失败：" + err.message); } return; }

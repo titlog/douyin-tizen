@@ -126,6 +126,7 @@ var Comments = (function () {
             if (cur !== me) { return; }
             me.err = e.message;
             Log.report("评论", me.item.id + " 取不到（" + (Date.now() - t0) + "ms）：" + e.message);
+            Diag.incident("评论加载失败：" + e.message);
             foot();
         });
     }
