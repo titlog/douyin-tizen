@@ -141,6 +141,8 @@ iframe.bridge { position: absolute; left: 0; top: 0; width: 1px; height: 1px; bo
 #tabs .tab { display: inline-block; margin: 0 34px; font-size: 34px; color: rgba(255, 255, 255, 0.6); padding-bottom: 8px; }
 #tabs .tab.on { color: #fff; font-weight: bold; border-bottom: 5px solid #fff; }
 #tabs .tab-hint { font-size: 24px; opacity: 0.6; }
+/* 焦点在标签栏上（暂停后上键）：当前那个标签是红底块，旁边写怎么走。 */
+#tabs .tab.on.focus { background: #fe2c55; border-bottom-color: transparent; border-radius: 30px; padding: 4px 24px 8px; }
 
 /* 登录 / 空页：盖在视频层上的整屏面板。 */
 #login, #empty {

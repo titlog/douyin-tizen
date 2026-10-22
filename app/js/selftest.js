@@ -98,6 +98,18 @@
     }
 
     function tabsShown() { return document.getElementById("tabs").className === "show"; }
+    /* 切标签（2026-10-22 起视频页上左右键是快进快退）：先到顶上的标签栏 —— 视频页暂停后上键，网格页一路往上，二维码 / 空页上键 ——
+     * 再按 n 次左 / 右，最后下键回来。 */
+    function viaTabs(code, n) {
+        if (!window.__app.tabFocus()) {
+            var v = window.__app.view();
+            if (v === "feed") { if (!st().paused) { key(KEY.ENTER); } key(KEY.UP); }
+            else if (v === "grid") { for (var i = 0; i < 10 && !window.__app.tabFocus(); i++) { key(KEY.UP); } }
+            else { key(KEY.UP); }
+        }
+        for (var j = 0; j < (n || 1); j++) { key(code); }
+        key(KEY.DOWN);
+    }
 
     /* 作者主页：暂停 → 下键选中作者 → 确认进主页 → 网格里挑第二条放 → 下键到第三条 → 返回回网格 → 返回回到原来那一条。
      * **返回键只在作者主页里按** —— 普通视频页上连按两次返回就退出应用了，所以每次按之前先看自己在哪。 */
@@ -237,7 +249,7 @@
                 check("快进键 +10 秒", b - a > 6 && b - a < 15.5, a.toFixed(1) + " → " + b.toFixed(1));
             });
         }).then(function () {
-            /* 左右键播放时切标签、暂停时快进 —— 这里测后一半。 */
+            /* 左右键：暂停时快进（这里），播着的时候也是快进（下面）；切标签在暂停后上键的标签栏里（2026-10-22 起）。 */
             key(KEY.ENTER);
             return wait(800).then(function () {
                 var a = st().t;
@@ -246,9 +258,30 @@
                     var b = st().t;
                     /* 暂停着量：只有关键帧对齐那一截，6.5–13.5 秒（电视上 +6.9 判错过）。 */
                     check("暂停时右键是快进", b - a > 6 && b - a < 14 && window.__app.tab() === "recommend", a.toFixed(1) + " → " + b.toFixed(1) + "，标签=" + window.__app.tab());
-                    key(KEY.ENTER);
-                    return wait(1000);
+                    /* 暂停后上键：焦点到顶上的标签栏（标签亮成红底块），下键回来，还是这一条、还暂停着。 */
+                    key(KEY.UP);
+                    return wait(500);
+                }).then(function () {
+                    var on = document.querySelector("#tabs .tab.focus");
+                    var ok1 = window.__app.tabFocus() && tabsShown() && on && on.textContent === "推荐";
+                    key(KEY.DOWN);
+                    return wait(400).then(function () {
+                        check("暂停后上键到标签栏、下键回来", ok1 && !window.__app.tabFocus() && st().paused && window.__app.tab() === "recommend",
+                              "标签栏选中「" + (on ? on.textContent : "无") + "」，回来后 焦点在标签栏=" + window.__app.tabFocus() + " 暂停=" + st().paused);
+                        key(KEY.ENTER);
+                        return wait(1500);
+                    });
                 });
+            });
+        }).then(function () {
+            /* 播着的时候左右键也是快进快退（2026-10-22 起），不再切标签。 */
+            var a = st().t;
+            key(KEY.RIGHT);
+            return wait(1500).then(function () {
+                var b = st().t;
+                check("播着的时候右键也是快进", b - a > 6 && b - a < 15.5 && window.__app.tab() === "recommend" && !st().paused,
+                      a.toFixed(1) + " → " + b.toFixed(1) + "，标签=" + window.__app.tab() + "，进度条" + (document.getElementById("progress").className === "show" ? "亮着" : "没亮"));
+                return wait(1000);
             });
         }).then(function () {
             /* 连按三下：只该落在第三条上并且播起来，中间两条不许留下残影或把会话弄乱。 */
@@ -281,7 +314,7 @@
              * 观看历史那些（焦点在顶上那一排，左键回推荐）；未登录时两个都出二维码。 */
             var recId = st().id, recT = st().t;
             var logged = Account.loggedIn();
-            key(KEY.RIGHT);
+            viaTabs(KEY.RIGHT);                      // 推荐 → 我
             return (logged ? wait(1500).then(function () { return 0; }) : waitQr(20000)).then(function (ms) {
                 if (logged) {
                     check("已登录时「我」是观看历史那些", window.__app.tab() === "me" && window.__app.view() === "grid" && window.__app.page() === "me", "视图=" + window.__app.view() + "，页=" + window.__app.page());
@@ -298,7 +331,7 @@
                     return wait(1500);
                 });
             }).then(function () {
-                key(KEY.LEFT);                       // 到关注
+                viaTabs(KEY.LEFT);                   // 到关注
                 return logged ? waitShown(recId, 20000) : waitQr(20000);
             }).then(function (ms) {
                 if (logged) {
@@ -308,7 +341,7 @@
                 }
                 check("未登录时「关注」出二维码", window.__app.tab() === "follow" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
             }).then(function () {
-                key(KEY.LEFT);                       // 到精选：三列网格，挑着看（2026-10-22）
+                viaTabs(KEY.LEFT);                   // 到精选：三列网格，挑着看（2026-10-22）
                 return waitFor(function () { var g = Grid.state(); return g && g.kind === "jingxuan" && g.cards > 0 && g.imgs >= Math.min(g.cards, 3); }, 20000);
             }).then(function (ms) {
                 var g = Grid.state() || {};
@@ -341,8 +374,8 @@
                 });
             }).then(function () { return switchStep("直播里下一个直播间", KEY.DOWN); })
               .then(function () {
-                /* 直播 → 右 精选（焦点在第一张）→ 右右到最右边那一列 → 右 关注 → 右 推荐。 */
-                key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT);
+                /* 直播 → 标签栏上右三下：精选、关注、推荐。 */
+                viaTabs(KEY.RIGHT, 3);
                 return waitShown("", 15000);
             }).then(function () {
                 return wait(2500).then(function () {
@@ -383,11 +416,9 @@
             }).then(one);
         }
         return waitShown("", 40000).then(one).then(function () {
-            key(KEY.RIGHT);
+            viaTabs(KEY.RIGHT);                      // 推荐 → 我（没登录是二维码）
             return wait(1500);
         }).then(function () {
-            if (Player.isPaused()) { key(KEY.ENTER); }
-            key(KEY.RIGHT);
             var seen = {}, count = 0, t1 = Date.now();
             function watch() {
                 var q = document.getElementById("qr");
@@ -406,7 +437,7 @@
     /* --qr：启动后直接去「我」，只看二维码有没有真的显示出来。30 秒出结果。 */
     function qrOnly() {
         return waitShown("", 40000).then(function () {
-            key(KEY.RIGHT);                          // 推荐右边就是「我」
+            viaTabs(KEY.RIGHT);                      // 推荐右边就是「我」
             return waitQr(30000);
         }).then(function (ms) {
             var q = document.getElementById("qr");
@@ -439,7 +470,7 @@
         }).then(function () {
             if (!wasOn) { Diag.setEnabled(true); }
             logged = Account.loggedIn();
-            key(KEY.RIGHT);                          // 推荐右边就是「我」
+            viaTabs(KEY.RIGHT);                      // 推荐右边就是「我」
             return wait(2000);
         }).then(function () {
             if (logged) { key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT); }     // 观看历史 → 喜欢 → 收藏 → 诊断日志
@@ -855,7 +886,7 @@
         var idx = 0;
         return waitShown("", 40000).then(function () { return Account.whenKnown(); }).then(function () {
             if (!Account.loggedIn()) { throw new Error("没登录，「我」页测不了"); }
-            key(KEY.RIGHT);
+            viaTabs(KEY.RIGHT);
             return waitFor(function () { var g = Grid.state(); return window.__app.page() === "me" && g && g.cards > 0 && g.imgs > 0 && g.stats; }, 20000);
         }).then(function (ms) {
             var g = Grid.state() || {};

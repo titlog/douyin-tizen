@@ -88,6 +88,18 @@ async function shot(name, dir) {
   execFileSync('sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '82', '-Z', '1600', png, '--out', path.join(dir || OUT, name + '.jpg')], {stdio: 'ignore'});
   log('截图 ' + name);
 }
+/* 切标签：视频页上左右键是快进快退（2026-10-22 起），切标签要先到顶上的标签栏 —— 视频页暂停后上键、网格页一路往上 —— 再左 / 右 n 下，
+ * 最后下键回来。 */
+async function viaTabs(code, n = 1) {
+  if (!(await ev(() => window.__app.tabFocus()))) {
+    const v = await ev(() => window.__app.view());
+    if (v === 'feed') { if (!(await ev(() => Player.state().paused))) await key(13); await key(38); }
+    else if (v === 'grid') { for (let i = 0; i < 10 && !(await ev(() => window.__app.tabFocus())); i++) await key(38); }
+    else await key(38);
+  }
+  for (let i = 0; i < n; i++) await key(code);
+  await key(40);
+}
 /* 暂停、下键选中右边那一列的头像、再下键往下走到 name（合集在最后，左下那一条）。 */
 async function chip(name) {
   await key(13); await sleep(600); await key(40); await sleep(300);
@@ -124,7 +136,7 @@ async function shootMe(name, dir, k) {
     return raw.length;
   }, k || 0);
   log('「我」拿作者作品和合集里的 ' + n + ' 条公开视频填');
-  await key(39);                               // 推荐 → 我
+  await viaTabs(39);                           // 推荐 → 我
   await waitFor(() => { const g = Grid.state(); return g && g.kind === 'me' && g.cards >= 4 && g.imgs >= Math.min(g.cards, 8); }, 20000, '「我」');
   await sleep(1500);
   await shot(name, dir);
@@ -235,7 +247,7 @@ await key(10009); await shown(); await sleep(1000);
 /* 精选（三列网格）和直播（2026-10-22 加的两个标签）。标签顺序 直播 · 精选 · 关注 · 推荐 · 我：推荐 → 左 关注（没登录是二维码）→ 左 精选
  * → 最左边那一列再左 直播。直播挑横屏的直播间（多是游戏、体育），不拿对着镜头的真人当 README 的图。 */
 if (!ONLY.length || ONLY.includes('07-jingxuan') || ONLY.includes('08-live')) {
-  await key(37); await sleep(800); await key(37);
+  await viaTabs(37, 2);                            // 推荐 → 关注 → 精选
   await waitFor(() => { const g = Grid.state(); return g && g.kind === 'jingxuan' && g.cards >= 6 && g.imgs >= 6; }, 30000, '精选');
   /* JX_SEL=n：焦点挪到第 n 张（一行三张：往下 n/3 行、往右 n%3 张）再截（2026-10-22 第一张的封面是全黑的，焦点框里空一块）。
    * 截完原路回到第一行最左边，再左就是直播。 */
@@ -270,7 +282,7 @@ if (!ONLY.length || ONLY.includes('07-jingxuan') || ONLY.includes('08-live')) {
   log('直播间：' + await ev(() => { const it = window.__app.current(); return it.author + ' ' + it.w + 'x' + it.h; }));
   await sleep(1500);
   await shot('08-live');
-  await key(39); await sleep(800); await key(39); await key(39); await key(39); await sleep(800); await key(39);   // 直播 → 精选（右右到最右边那一列）→ 关注 → 推荐
+  await viaTabs(39, 3);                           // 直播 → 精选 → 关注 → 推荐
   await shown(); await sleep(1000);
   if (ONLY.length && !ONLY.includes('04-mix') && !ONLY.includes('06-me')) { await browser.close(); process.exit(0); }
 }

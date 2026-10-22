@@ -10,8 +10,9 @@
  *
  * 遥控器：
  *   下键 / 频道减 → 下一条        上键 / 频道加 → 上一条
- *   左右键 → 切标签（暂停时改为快退 / 快进 10 秒）
- *   快进 / 快退键 → 任何时候都快进 / 快退 10 秒
+ *   左右键 / 快进快退键 → 不管暂不暂停都是快退 / 快进 10 秒（2026-10-22 用户要求；直播不能快进，按了没反应）
+ *   暂停后上键 → 焦点到顶上的标签栏：左右键切标签，下键 / 确认键 / 返回键回来（用户要求：标签不再占着左右键）。
+ *     精选、「我」这种网格页，最上面一行再往上也到标签栏
  *   确认 / 播放暂停键 → 暂停
  *   暂停时下键 → 选中右边那一列的头像，上下键往下走：头像 · 评论 · 合集（左下那一条；左右键也能在它和右边那列之间跳），
  *     确认键做，返回键 / 在头像上按上键取消。头像 → 作者主页，合集 → 选集（都是 js/grid.js 的网格页），评论 → 右边的评论侧栏（js/comments.js）
@@ -50,6 +51,8 @@
     var logoutAt = 0;
     var loginFor = "";        // 登录是从哪个标签发起的，成功后回到那里
     var loginDiag = -1;       // 「我」的二维码页最底下那一排选中了哪一项（0 诊断日志开关、1 上传），-1 没选中
+    var tabFocus = false;     // 焦点在顶上的标签栏（暂停后上键、网格最上面一行再往上）：左右键切标签
+    var progTimer = 0;        // 播着的时候快进快退，进度条亮 3 秒
     /* 叠起来的网格页（作者主页、「我」、选集）：{page, feed, play, resume, at, root}。最上面那一页要么在显示网格（play=false，
      * view "grid"），要么在放它的视频（play=true，view "feed"，feed() 是它的）。从放着的视频里再打开一页就往上叠一层，
      * 下面那一层记着放到了哪（at）；返回键一层层退。「我」是标签自己的页（root），退不掉。 */
@@ -127,11 +130,11 @@
         var cm = Comments.isOpen();
         setInfo(view === "feed" && !cm);
         var e = topPage();
-        var tabs = view === "grid" ? e.root : !cm && (withTabs || view !== "feed" || Player.isPaused());
+        var tabs = tabFocus || (view === "grid" ? e.root : !cm && (withTabs || view !== "feed" || Player.isPaused()));
         $("tabs").className = tabs ? "show" : "";
         clearTimeout(infoTimer);
         infoTimer = setTimeout(function () {
-            if (view === "feed" && !Player.isPaused()) { setInfo(false); $("tabs").className = ""; }
+            if (view === "feed" && !Player.isPaused()) { setInfo(false); if (!tabFocus) { $("tabs").className = ""; } }
         }, 5000);
     }
     /* 左下那块和右边那一列一起出来、一起淡出。 */
@@ -151,9 +154,34 @@
         }
         var html = "";
         for (var i = 0; i < TABS.length; i++) {
-            html += "<span class=\"tab" + (i === tab ? " on" : "") + "\">" + TABS[i].name + "</span>";
+            html += "<span class=\"tab" + (i === tab ? " on" : "") + (i === tab && tabFocus ? " focus" : "") + "\">" + TABS[i].name + "</span>";
         }
+        if (tabFocus) { html += "<span class=\"tab-hint\">左右键切换标签 · 下键回来</span>"; }
         $("tabs").innerHTML = html;
+    }
+    function setTabFocus(on) {
+        tabFocus = on;
+        markTabs();
+        showInfo(true);
+        hint();
+    }
+    /* 快退 / 快进：不管暂不暂停（2026-10-22 起左右键也是它）。播着的时候进度条和时间亮 3 秒，看得出跳到了哪。直播不能跳。 */
+    function seekBy(d) {
+        var it = current();
+        if (it && it.live) { showInfo(); return; }
+        Player.seek(d);
+        var p = Player.isPaused();
+        showInfo(p);
+        if (p) { return; }
+        $("progress").className = "show";
+        $("time").className = "show";
+        clearTimeout(progTimer);
+        progTimer = setTimeout(function () {
+            if (Player.isPaused()) { return; }
+            $("progress").className = "";
+            var c = current();
+            $("time").className = c && c.live ? "show live" : "";
+        }, 3000);
     }
 
     // ---------- 暂停时能选中的：右边那一列（头像 · 点赞 · 评论 · 收藏）和左下的合集 ----------
@@ -230,7 +258,7 @@
         var h = "";
         if (it && Player.isPaused() && !Comments.isOpen()) {
             var c = chips(it), k = c[chip];
-            h = !c.length ? "" : chip < 0 ? "下键选中 " + c.map(function (x) { return CHIP_NAME[x]; }).join(" · ") :
+            h = chip < 0 ? (c.length ? "下键选中 " + c.map(function (x) { return CHIP_NAME[x]; }).join(" · ") : "") + (!topPage() && !tabFocus ? (c.length ? " · " : "") + "上键切换标签" : "") :
                 (k === "mix" ? chipHint(k, it) + " · " : "") + "上下键换 · 返回键取消";
         }
         $("hint").textContent = h;
@@ -924,7 +952,8 @@
             /* 返回键一层层退：评论侧栏 → 取消选中 → 从放着的视频回到网格 → 退掉这一页 → 退出应用（按两次）。
              * 「我」是标签自己的页，退不掉：网格里先回到顶上那一排，那一排上再按就是退出。 */
             var e0 = topPage();
-            if (Comments.isOpen()) { closeComments(); }
+            if (tabFocus) { setTabFocus(false); }
+            else if (Comments.isOpen()) { closeComments(); }
             else if (chip >= 0) { setChip(-1); }
             else if (view === "login" && loginDiag >= 0) { loginDiag = -1; paintLoginDiag(); }
             else if (view === "feed" && e0 && e0.play) { backToGrid(); }
@@ -934,10 +963,20 @@
             e.preventDefault();
             return;
         }
+        /* 焦点在顶上的标签栏：左右键切标签（停在标签栏上），下键 / 确认键回来；播放暂停键照样管视频。 */
+        if (tabFocus) {
+            if (k === KEY.LEFT) { moveTab(-1); }
+            else if (k === KEY.RIGHT) { moveTab(1); }
+            else if (k === KEY.DOWN || k === KEY.ENTER) { setTabFocus(false); }
+            else if ((k === KEY.PLAY_PAUSE || k === KEY.PLAY || k === KEY.PAUSE) && view === "feed") { togglePause(); }
+            else if (k !== KEY.UP) { return; }
+            e.preventDefault();
+            return;
+        }
         if (view === "grid") {
             if (k === KEY.LEFT) { if (Grid.move(-1, 0) === "left") { moveTab(-1); } }      // 「我」顶上那一排、精选最左边那一列回 "left"
             else if (k === KEY.RIGHT) { if (Grid.move(1, 0) === "right") { moveTab(1); } }        // 只有精选回 "right"
-            else if (k === KEY.UP) { Grid.move(0, -1); }
+            else if (k === KEY.UP) { if (Grid.move(0, -1) === "up" && topPage().root) { setTabFocus(true); } }    // 标签自己的网格（精选、「我」）最上面再往上
             else if (k === KEY.DOWN) { Grid.move(0, 1); }
             else if (k === KEY.ENTER || k === KEY.PLAY || k === KEY.PLAY_PAUSE) {
                 if (Grid.zone() === "tabs") {
@@ -969,6 +1008,7 @@
             else if (k === KEY.RIGHT) { moveTab(1); }
             else if (k === KEY.ENTER && view === "empty") { retryTab(); }
             else if (k === KEY.ENTER && view === "login") { startLogin(); }
+            else if (k === KEY.UP) { setTabFocus(true); }
             else { return; }
             e.preventDefault();
             return;
@@ -992,7 +1032,6 @@
             return;
         }
         var inPage = !!topPage();
-        var live = !!(current() && current().live);    // 直播不能快进快退，暂停时左右键照样切标签
         switch (k) {
         case KEY.DOWN:
             /* 暂停时下键是选中右边那一列（从头像开始）。频道减键照旧是下一条。 */
@@ -1001,23 +1040,19 @@
         case KEY.CH_DOWN:
             next("下键"); break;
         case KEY.UP:
+            /* 暂停后上键：焦点到顶上的标签栏。播着的时候照旧是上一条；放网格页的视频时顶上没有标签，也照旧。 */
+            if (Player.isPaused() && !inPage) { setTabFocus(true); break; }
             prev(); break;
         case KEY.CH_UP:
             prev(); break;
         case KEY.ENTER:
         case KEY.PLAY_PAUSE: case KEY.PLAY: case KEY.PAUSE:
             togglePause(); break;
-        /* 在放网格页的视频时没有标签可切：左右键只把顶上那行「放的是什么 · 返回键回到哪」亮出来。 */
-        case KEY.LEFT:
-            if (Player.isPaused() && !live) { Player.seek(-10); showInfo(true); } else if (inPage) { showInfo(true); } else { moveTab(-1); }
-            break;
-        case KEY.RIGHT:
-            if (Player.isPaused() && !live) { Player.seek(10); showInfo(true); } else if (inPage) { showInfo(true); } else { moveTab(1); }
-            break;
-        case KEY.REW:
-            if (!live) { Player.seek(-10); } showInfo(); break;
-        case KEY.FF:
-            if (!live) { Player.seek(10); } showInfo(); break;
+        /* 左右键不管暂不暂停都是快退 / 快进（2026-10-22 用户要求），和快进快退键一样；切标签在暂停后上键的标签栏里。 */
+        case KEY.LEFT: case KEY.REW:
+            seekBy(-10); break;
+        case KEY.RIGHT: case KEY.FF:
+            seekBy(10); break;
         default:
             return;
         }
@@ -1112,6 +1147,8 @@
         setCoverSeek: function (ms) { COVER_SEEK_MS = ms; },
         records: function () { return records; },
         /* 自测 --diag 用：二维码页最底下那一排选中了哪一项。 */
-        loginDiag: function () { return loginDiag; }
+        loginDiag: function () { return loginDiag; },
+        /* 自测：焦点在不在顶上的标签栏。 */
+        tabFocus: function () { return tabFocus; }
     };
 })();

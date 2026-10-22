@@ -295,17 +295,18 @@ var Grid = (function () {
         var cols = me.geo.cols;
         if (me.kind === "jingxuan" && dx > 0 && (!me.cards.length || me.sel % cols === cols - 1 || me.sel + 1 >= me.cards.length)) { return "right"; }
         if (me.kind === "jingxuan" && dx < 0 && (!me.cards.length || me.sel % cols === 0)) { return "left"; }
+        /* 回 "up"：最上面再往上（「我」顶上那一排、没有那一排的页的第一行）—— app.js 把焦点交给顶上的标签栏。 */
         if (me.zone === "tabs") {
             if (dy > 0) { if (me.cards.length) { me.zone = "grid"; measure(focus(true)); } return ""; }
-            if (dy < 0) { return ""; }
+            if (dy < 0) { return "up"; }
             var t = me.tab + dx;
             if (t < 0) { return me.kind === "me" ? "left" : ""; }
             if (t < me.tabs.length) { setTab(t); }
             return "";
         }
         if (!me.cards.length) {
-            if (dy < 0 && me.tabs) { me.zone = "tabs"; focus(false); }
-            return "";
+            if (dy < 0 && me.tabs) { me.zone = "tabs"; focus(false); return ""; }
+            return dy < 0 ? "up" : "";
         }
         var n = me.cards.length, s = me.sel;
         if (dx) {
@@ -315,8 +316,8 @@ var Grid = (function () {
         } else {
             s += dy * cols;
             if (s < 0) {
-                if (me.tabs) { me.zone = "tabs"; focus(false); }
-                return "";
+                if (me.tabs) { me.zone = "tabs"; focus(false); return ""; }
+                return "up";
             }
             if (s >= n) {
                 /* 往下到了比这一行短的最后一行：落在最后一张上。已经在最后一行：去取下一页。 */

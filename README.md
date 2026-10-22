@@ -31,6 +31,7 @@
 ## 能做的
 
 - **直播 / 精选 / 关注 / 推荐 / 我** 五个标签。关注、推荐上下键刷，播完自动下一条；每个标签各记各的位置。
+- **左右键**快退 / 快进 10 秒；**暂停后按上键**到顶上的标签栏，左右键切标签，下键回来。
 - **精选**：三列网格挑着看，看的时候上下键接着刷，返回键回到网格。
 - **直播**：上下键换直播间，进一个直播间 1 秒多出画面。
 - **扫码登录**：官网的登录页在隐藏框里打开，二维码搬到电视上放大。
@@ -143,6 +144,7 @@ A Douyin (TikTok China) client for Samsung Tizen TVs, driven by the remote. The 
 no backend, no proxy, no server; the login stays on the set.
 
 - Five tabs (live / featured / following / recommended / me). Following and recommended: up and down to browse, autoplay next.
+- Left and right skip back / forward 10 s. To change tabs, pause and press up to reach the tab bar, then left / right; down to return.
 - Featured is a three-column grid to pick from; while watching, up and down keep browsing, Back returns to the grid.
 - Live: up and down to change rooms; a room shows picture in a little over a second.
 - QR sign-in: the official login page runs in a hidden frame and its QR code is shown full size on the TV.
