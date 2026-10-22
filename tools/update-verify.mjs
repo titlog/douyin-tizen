@@ -248,6 +248,30 @@ next = await fire();
 ok(next === E && /^不用下载：.*已经下载好了/.test(lastReport()), "联网了、没有要下的 → " + Math.round(next / MIN / 60) + " 小时后再查：「" + lastReport() + "」");
 ok(JSON.parse(S.localStorage.getItem("dy.update.last")).fails === 0, "记录里的失败计数清零");
 
+/* 10-22：刚查过又开机，照样一分钟后查 —— 记录只管一次开机里的间隔。 */
+const before = reports.length;
+let onVisible = null;
+const doc = { hidden: false, addEventListener: (t, fn) => { if (t === "visibilitychange") { onVisible = fn; } } };
+const S2 = loadUpdate({ Date: function () { return { getTime: () => clock }; }, localStorage: S.localStorage, document: doc,
+  setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {}, XMLHttpRequest: FakeXhr });
+S2.Boot.PUBKEY = testPub;
+S2.Update.init({ report: (k, t) => reports.push(t) });
+ok(timers[timers.length - 1].ms === 60000, "刚查过又开机 → 还是一分钟后查");
+next = await fire();
+ok(reports.length > before + 1 && /^不用下载/.test(lastReport()) && next === E,
+   "开机这一次照查（「" + lastReport() + "」），之后 " + Math.round(next / MIN / 60) + " 小时");
+const n0 = timers.length;
+ok(typeof onVisible === "function", "update.js 自己听 visibilitychange");
+onVisible();
+ok(timers.length === n0, "刚查过就从后台回来 → 不另查");
+clock += S2.Update._test.WAKE_GAP + MIN;
+doc.hidden = true; onVisible();
+ok(timers.length === n0, "藏到后台那一下不查");
+doc.hidden = false; onVisible();
+ok(timers.length === n0 + 1 && timers[timers.length - 1].ms === 60000, "离上次检查一个多小时、从后台回来 → 一分钟后查");
+next = await fire();
+ok(/^不用下载/.test(lastReport()) && next === E, "从后台回来的那次照查，之后 " + Math.round(next / MIN / 60) + " 小时");
+
 console.log("「已更新到」只提示一次");
 function initWith(store) {
   const notices = [];

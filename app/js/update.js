@@ -5,8 +5,8 @@
  * 更新包的主机都不必可信 —— GitHub、jsDelivr、被劫持的 DNS 在这个文件眼里一样：字节要么验得过，要么扔掉。
  * 引擎没有 crypto.subtle 的电视什么都验不了，所以永远不更新。
  *
- * 只在下次启动生效，绝不在跑着的时候换：在放着的视频底下换代码是这个应用不需要的一类 bug。开机一分钟后
- * 查一次，之后最多每六小时一次，查失败了早点再查（waitAfter）。不像 bilibili 那样避开「正在播放」：
+ * 只在下次启动生效，绝不在跑着的时候换：在放着的视频底下换代码是这个应用不需要的一类 bug。每次开机一分钟后
+ * 查一次（不看上次什么时候查的），开着就每六小时一次、从后台回来离上次超过一小时也查，查失败了早点再查（waitAfter）。不像 bilibili 那样避开「正在播放」：
  * 这里一直在播放。manifest 不到 1KB，更新包几百 KB、每个版本只下一次。
  *
  * 这个文件在每个更新包里，所以检查的逻辑本身能被更新修好；boot.js 和钥匙不能。tools/update-verify.mjs
@@ -26,6 +26,7 @@ var Update = (function () {
     var FIRST_DELAY = 60000;
     var EVERY = 6 * 3600 * 1000;
     var RETRY = 15 * 60000;              /* 查失败之后；连着失败每次翻倍 */
+    var WAKE_GAP = 3600 * 1000;          /* 从后台回来：离上次检查超过这么久就再查一次 */
     var TIMEOUT = 20000;
     var K_LAST = "dy.update.last";       /* 上一次查完的 {at, result, error, fails} */
     var K_SOURCE = "dy.update.source";   /* 只有开发构建认，见 manifestUrls() */
@@ -243,10 +244,29 @@ var Update = (function () {
     }
     /* 下一次照上一次的记录排；读不回记录就等 EVERY，免得一个拒绝写入的存储让这里空转。 */
     function rearm() { schedule(waitAfter(parse(get(K_LAST)), now()) || EVERY); }
+    /* 每次开机的第一次检查不看记录。以前开机也要等满离上次 6 小时：2026-10-22 一小时发一版，
+     * 装好就查过一次的电视之后怎么开都不查，「用一会儿，下次打开就是新的」不成立（bilibili-tizen #5，
+     * 那位每版都重装）。一次开机多一个 manifest，一 KB。 */
+    var firstOfRun = true;
     function tick() {
-        var wait = waitAfter(parse(get(K_LAST)), now());
-        if (wait > 0) { schedule(wait); return; }
+        if (!firstOfRun) {
+            var wait = waitAfter(parse(get(K_LAST)), now());
+            if (wait > 0) { schedule(wait); return; }
+        }
+        firstOfRun = false;
         check(rearm);
+    }
+    /* 从后台回来、离上次检查超过 WAKE_GAP：一分钟后再查。Tizen 常常是挂起不是重开，只靠「每次开机」
+     * 会漏掉从来不真正关掉的电视。 */
+    function wake() {
+        if (checking) { return; }
+        var last = parse(get(K_LAST));
+        if (last && last.at && now() - last.at < WAKE_GAP) { return; }
+        firstOfRun = true;
+        schedule(FIRST_DELAY);
+    }
+    if (typeof document !== "undefined" && document.addEventListener) {
+        try { document.addEventListener("visibilitychange", function () { if (!document.hidden) { wake(); } }); } catch (e) {}
     }
 
     return {
@@ -265,6 +285,7 @@ var Update = (function () {
             schedule(opts.firstDelay || FIRST_DELAY);
         },
         check: function (done) { check(function (r) { rearm(); if (done) { done(r); } }); },
+        wake: wake,
         status: function () {
             var info = Boot.info(), last = parse(get(K_LAST)) || {};
             return {
@@ -275,6 +296,6 @@ var Update = (function () {
             };
         },
         _test: { verifySignature: verifySignature, sha256Hex: sha256Hex, judge: judge, readManifest: readManifest, readBundle: readBundle,
-                 record: record, waitAfter: waitAfter, RETRY: RETRY, EVERY: EVERY }
+                 record: record, waitAfter: waitAfter, RETRY: RETRY, EVERY: EVERY, WAKE_GAP: WAKE_GAP }
     };
 })();

@@ -958,7 +958,7 @@
         }
         enterTab(START_TAB, "启动");
 
-        /* 自动更新（update.js，2026-10-20，照搬 bilibili）：先报这次跑的是哪份代码、为什么，一分钟后查，之后每六小时。
+        /* 自动更新（update.js，2026-10-20，照搬 bilibili）：先报这次跑的是哪份代码、为什么，每次开机一分钟后查，开着每六小时。
          * 自测构建不查：它会自己换视频、量时间，不该有一个后台下载混进去。 */
         if (typeof SELFTEST === "undefined" || !SELFTEST) {
             try { Update.init({ report: Log.report, notice: function (t) { toast(t, 4000); } }); }
