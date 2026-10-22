@@ -174,7 +174,7 @@ var Grid = (function () {
             c.style.top = (me.top + Math.floor(i / g.cols) * row(g)) + "px";
             if (g.wide) {
                 /* 宽卡片用作者做的封面（大字都在上面）：横版 16:9 的（card）优先，没有就用 thumb（作者封面；精选接口给的是 4:3，裁掉上下一点），
-                 * 再没有才用 cover（视频里抽的一帧，没有字 —— 第一版就是用的它，用户问「手机上封面都有大字，你的怎么没有」）。 */
+                 * 再没有才用 cover（视频里抽的一帧，没有字 —— 第一版用的就是它，和手机上的精选对不上）。 */
                 c.innerHTML = "<div class=\"th\"><img><span class=\"dur\"></span></div><div class=\"tt\"></div><div class=\"by\"></div>";
                 c.firstChild.firstChild.src = it.card || it.thumb || it.cover;
                 c.firstChild.lastChild.textContent = it.dur ? clock(it.dur) : "";

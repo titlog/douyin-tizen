@@ -1,4 +1,4 @@
-// 直播 tab 的接口（2026-10-22 用户要求「再加一个直播的 tab，上下滑动切换」）：全新匿名浏览器打开官网直播页，看它问了哪些
+// 直播 tab 的接口（2026-10-22 加直播标签，上下键换直播间）：全新匿名浏览器打开官网直播页，看它问了哪些
 // /webcast/ 接口、带什么参数、回来的房间里拉流地址长什么样（FLV / HLS、几档清晰度）。只读，不登录。
 //   node live-probe.mjs                     → live.douyin.com 首页
 //   URL=https://www.douyin.com/... node live-probe.mjs

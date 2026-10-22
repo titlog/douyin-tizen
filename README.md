@@ -8,22 +8,25 @@
 > **与抖音、字节跳动、三星均无关联。** 个人项目，MIT 协议。
 > 兄弟项目：[bilibili-tizen](https://github.com/titlog/bilibili-tizen)、[telegram-tizen](https://github.com/titlog/telegram-tizen)。
 
-![刷视频](docs/screenshots/01-feed.jpg)
-
-*上下键刷。和手机上一样：作者、标题在左下，右边一列是头像 · 赞 · 评论 · 收藏 · 分享，几秒后淡出。*
-
-| | |
-|---|---|
-| ![暂停后按下键](docs/screenshots/02-actions.jpg) | ![评论](docs/screenshots/05-comments.jpg) |
-| 暂停后按下键选中右边那一列：头像 · 评论（带合集的视频还有左下的「合集」） | 评论侧栏：上下键翻，确认键展开回复 |
-| ![合集选集](docs/screenshots/04-mix.jpg) | ![作者主页](docs/screenshots/03-author.jpg) |
-| 合集选集：焦点在正在看的那一集，接着放、下键下一集 | 作者主页：资料和作品网格，往下翻自动加载 |
-| ![精选](docs/screenshots/07-jingxuan.jpg) | ![直播](docs/screenshots/08-live.jpg) |
-| 精选：三列网格挑着看，封面是作者做的那张 | 直播：上下键换直播间 |
-
-![「我」](docs/screenshots/06-me.jpg)
-
-*「我」：观看历史 · 喜欢 · 收藏。*
+<!-- 一行两张，八张一样大。用 HTML 表格：没有 Markdown 表格那一行空表头。 -->
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/01-feed.jpg" alt="刷视频"><br>上下键刷。和手机上一样：作者、标题在左下，右边一列是头像 · 赞 · 评论 · 收藏 · 分享</td>
+<td width="50%"><img src="docs/screenshots/02-actions.jpg" alt="暂停后按下键"><br>暂停后按下键选中右边那一列：头像 · 评论（带合集的视频还有左下的「合集」）</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/05-comments.jpg" alt="评论"><br>评论侧栏：上下键翻，确认键展开回复</td>
+<td width="50%"><img src="docs/screenshots/03-author.jpg" alt="作者主页"><br>作者主页：资料和作品网格，往下翻自动加载</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/04-mix.jpg" alt="合集选集"><br>合集选集：焦点在正在看的那一集，接着放、下键下一集</td>
+<td width="50%"><img src="docs/screenshots/06-me.jpg" alt="「我」"><br>「我」：观看历史 · 喜欢 · 收藏</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/07-jingxuan.jpg" alt="精选"><br>精选：三列网格挑着看，封面是作者做的那张</td>
+<td width="50%"><img src="docs/screenshots/08-live.jpg" alt="直播"><br>直播：上下键换直播间</td>
+</tr>
+</table>
 
 > 截图是在电脑上的测试台里没登录截的（`spike/desktop-harness/readme-shots.mjs`）。「我」那一张没登录看不到，名字和列表是编的
 > （拿截图里那位作者的作品和那个合集填的）。

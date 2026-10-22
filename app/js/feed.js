@@ -189,9 +189,8 @@ var Feed = (function () {
             type: a.aweme_type || 0,
             avatar: first(au.avatar_thumb),
             thumb: first(v.cover),        // 作者主页网格用：url_list[0] 是官方裁好的 3:4 小图（cropcenter:323:430）
-            /* 精选的 16:9 宽卡片用：作者做的横版封面（大字都在这张上，手机上精选的卡片就是它）。2026-10-22 用户：「手机上封面都有很多大字，
-             * 你做的几乎都没有」—— 原来用的 origin_cover 是视频里抽的一帧。没有横版的退到 thumb（作者封面，4:3）。_big 是 1760×990，电视上解一张
-             * 就 7MB，一屏二十张不划算，853×480 那张够清楚。 */
+            /* 精选的 16:9 宽卡片用：作者做的横版封面（大字都在这张上，手机上精选的卡片就是它；2026-10-22 之前用的 origin_cover 是视频里抽的一帧，
+             * 没有字）。没有横版的退到 thumb（作者封面，4:3）。_big 是 1760×990，电视上解一张就 7MB，一屏二十张不划算，853×480 那张够清楚。 */
             card: first(v.universal_cover_horizontal169) || first(v.universal_cover_horizontal169_big) || "",
             top: !!a.is_top,
             time: a.create_time || 0,     // 发布时间（秒）：日志里报视频有多老（老视频走冷存储），--cold 挑一年以前的
@@ -212,7 +211,7 @@ var Feed = (function () {
         };
     }
 
-    /* 直播间（2026-10-22 用户要「再加一个直播的 tab，上下滑动切换」）。/webcast/feed/ 的 data[] 每项是 {type: 1, data: 房间}，房间里直接
+    /* 直播间（2026-10-22 加的直播标签，上下键换直播间）。/webcast/feed/ 的 data[] 每项是 {type: 1, data: 房间}，房间里直接
      * 带着拉流地址：flv_pull_url、hls_pull_url_map 各四档（FULL_HD1 蓝光 1088p、HD1 超清、SD2 高清、SD1 标清），不签名、不认 Referer
      * （和点播的跳转接口一样，开发机 curl 直接取到）。**编码几乎全是 H.265**（live_core_sdk_data 里各档的 VCodec；只有 240p 那一档是
      * H.264，不声明 HEVC 也一样），HLS 是 MPEG-TS 分片、每片 ~3.7 秒。放法交给 Player：直播间走 src（<video> 直接放 m3u8）。

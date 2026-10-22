@@ -45,7 +45,7 @@ var Mse = (function () {
     var ops = [], lastT = -1, stallFrom = 0, stallTold = false, showAt = 0;   // 停顿诊断：最近 3 秒的队列操作
     var handlers = {};
 
-    /* 第一帧（2026-10-22，用户：「下滑先出现一个画面，再突然开始播放」）。切换时盖着的封面是 origin_cover，不一定是第一帧，撤封面那一下
+    /* 第一帧（2026-10-22）。切换时盖着的封面是 origin_cover，不一定是第一帧，撤封面那一下
      * 画面会跳。预热时把这条的第一个关键帧留下来，备好之后用 WebCodecs **软件**解出来、缩到画面大小画进一张 canvas，切过去时当封面 ——
      * seek 到槽起点后硬件出的第一帧就是它。--splice 在电视上量过：prefer-software 解一帧 76ms，正在放的那条一点不受影响；no-preference /
      * prefer-hardware 抢了唯一的解码器，正在放的那条停了 100–272ms。所以只许软件解，在预热时做（画进 canvas 也要上百毫秒）。
