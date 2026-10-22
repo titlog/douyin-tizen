@@ -56,6 +56,8 @@ const HOST = [
   "DataView", "Promise", "Blob", "Function", "fetch", "performance",
   "requestAnimationFrame", "PerformanceObserver", "TextEncoder", "TextDecoder",
   "tizen", "webapis",
+  // WebCodecs：msespike.js 的 --splice 探测用，用之前先 typeof 判断（这台电视有没有还要量）
+  "VideoDecoder", "EncodedVideoChunk",
 ];
 
 let failed = false;
@@ -116,7 +118,7 @@ function scanFile(file, known) {
 }
 
 /* 第三方的压缩代码不扫（满是单字母名字），只记下它往全局放了什么。 */
-const VENDOR_GLOBALS = { "vendor/mp4box.js": ["MP4Box"] };
+const VENDOR_GLOBALS = { "vendor/mp4box.js": ["MP4Box"], "vendor/mpegts.js": ["MpegtsLib"] };
 
 const known = new Set();
 for (const f of ORDER) {

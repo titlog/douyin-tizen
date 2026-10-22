@@ -1,9 +1,10 @@
-/* 一个 <video>，两种放法（2026-09-30 起）：
+/* 一个 <video>，三种放法（2026-09-30 起；直播 2026-10-22）：
  *   "mse"：默认。整个会话一个 MediaSource，每条视频一个时间槽，切换 = seek（js/mse.js）。换 src 要
  *          ~1.2 秒拆建解码管线，seek 到预先 append 好的槽 ~0.25 秒（CLAUDE.md）。
  *   "src"：给元素换 src。MSE 放不了的条目（非 H.264、没有音轨、moov 不在开头……）走它；MSE 管线在
  *          一次会话里坏了 3 次，整场改走它。两种之间切换要拆掉 MediaSource，下一条 MSE 冷启动。
- * app.js 看到的接口两种一样；时间、时长都换算成这一条自己的（MSE 的 currentTime 带着槽的偏移）。
+ *   "flv"：直播间。mpegts.js 把 FLV（H.265）转成 fMP4 交给它自己的 MediaSource，见 playFlv。
+ * app.js 看到的接口都一样；时间、时长都换算成这一条自己的（MSE 的 currentTime 带着槽的偏移）。
  *
  * 以下是 src 放法的来历。
  *
@@ -83,8 +84,64 @@ var Player = (function () {
         s.objectFit = "fill";
     }
     function rel() { return engine === "mse" && mseE ? Math.max(0, el.currentTime - mseE.base) : el.currentTime; }
-    function relDur() { return engine === "mse" && mseE ? mseE.dur : (el.duration || 0); }
-    function useMse(it) { return USE_MSE && !mseOff && Mse.usable(it); }
+    function relDur() { return engine === "mse" && mseE ? mseE.dur : (isFinite(el.duration) ? el.duration || 0 : 0); }     // 直播是 Infinity
+    /* 直播间（feed.js 的 live）不走 Mse：那一套是给渐进式 MP4 的。有 FLV 地址走 playFlv，没有退回 src（<video> 直接放 m3u8）。 */
+    function useMse(it) { return USE_MSE && !mseOff && !it.live && Mse.usable(it); }
+
+    /* 直播：mpegts.js（vendor/mpegts.js）把 FLV 转成 fMP4 交给 MSE（2026-10-22，电视上 --live / --livemse 同一天量的）：
+     *   <video> 直接放 m3u8   playing 之后播放头停在 0 不动 5–10 秒（缓冲里已经 12 秒、readyState=4）：平台播放器要先攒一大截才走，
+     *                         <video> 没有开关；可跳范围是空的，往回退也做不了。<video> 直接放 FLV 也一样（8 秒没动）。
+     *   AVPlay                能设 setBufferingParam（bilibili-tizen 就这么做），但我们的 CSP 是 object-src 'none'，它的 <object> 会被拦，
+     *                         而 CSP 跟着安装包走、不跟自动更新走 —— 已经装着的电视都用不了。
+     *   mpegts.js FLV → MSE   开始到画面动起来中位 1.0 秒（741–1050ms），之后 15 秒里 4 个直播间 3 个一次没停（默认配置；「低延迟」那套
+     *                         中位 0.75 秒，但 4 个里 3 个停了 0.4–0.6 秒）。电视的 MSE 认 hvc1 / hev1，画面 1080p。
+     * 每个直播间新建一个播放器（它自己的 MediaSource）：和点播的 Mse 管线共用这一个 <video>，换过去之前先把另一边拆掉。 */
+    var flvP = null, flvTicks = 0, flvTimer = 0;
+    /* 进直播间先等这么久再动管线：连按左右键「路过」直播（精选 ↔ 推荐之间要经过它）的时候什么都不拆。2026-10-22 电视上自测连按三下
+     * 右键（精选 → 直播 → 关注 → 推荐），点播管线被拆掉、直播的建起来又拆掉、点播的冷启动再从中间 seek —— 那一下 seek 卡了 12 秒，
+     * 被看门狗跳过。路过不拆，回到推荐就是原地接着放。 */
+    var FLV_DELAY = 350;
+    function stopFlv() {
+        if (!flvP) { return; }
+        var p = flvP;
+        flvP = null;
+        try { p.pause(); } catch (e) {}
+        try { p.unload(); } catch (e) {}
+        try { p.detachMediaElement(); } catch (e) {}
+        try { p.destroy(); } catch (e) {}
+    }
+    function playFlv(it) {
+        if (engine === "mse") { Mse.detach(); mseE = null; }
+        else if (engine === "src") { try { el.pause(); } catch (e) {} el.removeAttribute("src"); try { el.load(); } catch (e) {} }
+        stopFlv();
+        engine = "flv";
+        place(null);
+        usedWarm = "无";
+        var lib, g = gen;
+        try { lib = MpegtsLib.get(); } catch (e) {
+            Log.report("直播", "mpegts.js 起不来（" + e.message + "），退回 <video> 直接放 m3u8");
+            playSrc(it, 0);
+            return;
+        }
+        try {
+            flvP = lib.createPlayer({type: "flv", isLive: true, url: it.flv}, {enableWorker: false});
+            flvP.on(lib.Events.ERROR, function (type, detail, info) {
+                if (g !== gen) { return; }
+                Log.report("直播", "mpegts 出错 " + type + " " + detail + " " + (info && info.msg || "") + " | " + it.room + " " + it.flv.split("?")[0].split("/").slice(2, 3)[0]);
+                if (handlers.error) { handlers.error("直播：" + detail); }
+            });
+            /* 看门狗看「字节还在不在来」：统计信息每 ~600ms 来一次，来了就算有进展。 */
+            flvP.on(lib.Events.STATISTICS_INFO, function () { if (g === gen) { flvTicks++; } });
+            flvP.attachMediaElement(el);
+            flvP.load();
+            var p = flvP.play();
+            if (p && p.catch) { p.catch(function () {}); }
+        } catch (e) {
+            Log.report("直播", "mpegts 抛异常 " + e.message + "，退回 <video> 直接放 m3u8");
+            stopFlv();
+            playSrc(it, 0);
+        }
+    }
 
     function start(url) {
         el.src = url;
@@ -96,11 +153,35 @@ var Player = (function () {
         }
     }
 
+    /* 直播间在 "flv" 放法里放（playFlv）。下面这段是没有 FLV 地址时退回 <video> 直接放 m3u8 用的 —— 2026-10-22 电视上第一次放：HEVC 解得出来（1088x1920），但起播后 6 秒里停了 3.5–5.8 秒。怀疑是贴着
+     * 直播最新的那一片起播、手里没有缓冲（每片 ~3.7 秒，下一片还没生成就只能等）。LIVE_BACK：起播时离可跳范围的末端留几秒，0 是不管
+     * （平台自己选的位置）。自测 --live 在同一轮里轮换。元数据那一刻把可跳范围、缓冲、播放头报进「直播」那行。 */
+    var LIVE_BACK = 10;
+    var liveWait = 0, liveStalls = [];
+    function fmtRanges(r) {
+        var out = [];
+        try { for (var i = 0; i < r.length; i++) { out.push(r.start(i).toFixed(1) + "–" + r.end(i).toFixed(1)); } } catch (e) {}
+        return out.join(" ") || "空";
+    }
+    function liveStart() {
+        var sk = el.seekable, info = "可跳 " + fmtRanges(sk) + "，缓冲 " + fmtRanges(el.buffered) + "，播放头 " + el.currentTime.toFixed(1), moved = "";
+        if (LIVE_BACK && sk.length) {
+            var target = Math.max(sk.start(0), sk.end(sk.length - 1) - LIVE_BACK);
+            if (target < el.currentTime - 1) { el.currentTime = target; moved = "，往回退到 " + target.toFixed(1); }
+        }
+        Log.report("直播", "元数据 " + (Date.now() - switchAt) + "ms：" + info + moved + "（LIVE_BACK=" + LIVE_BACK + "）| " + (item ? item.room : ""));
+    }
     function wire() {
         el.addEventListener("loadedmetadata", function () {
             if (engine !== "src") { return; }
+            if (item && item.live) { liveStart(); return; }
             if (pendingSeek && el.duration && pendingSeek < el.duration - 3) { el.currentTime = pendingSeek; }
             pendingSeek = 0;
+        });
+        /* 直播放着放着停住（等下一片）：每次多久、停的时候前方缓冲多少，攒着，换走时报一行。 */
+        el.addEventListener("waiting", function () { if (item && item.live && told && !liveWait) { liveWait = Date.now(); } });
+        el.addEventListener("playing", function () {
+            if (liveWait) { liveStalls.push(Date.now() - liveWait); liveWait = 0; }
         });
         ["loadedmetadata", "loadeddata", "canplay", "seeked"].forEach(function (name) {
             el.addEventListener(name, function () { if (!told && !marks[name]) { marks[name] = Date.now() - switchAt; } });
@@ -182,6 +263,7 @@ var Player = (function () {
 
     function playSrc(it, startAt) {
         if (engine === "mse") { Mse.detach(); mseE = null; }
+        stopFlv();
         engine = "src";
         place(null);
         pendingSeek = startAt > 1 ? startAt : 0;
@@ -205,6 +287,7 @@ var Player = (function () {
     }
 
     function playMse(it, startAt) {
+        if (engine === "flv") { stopFlv(); el.removeAttribute("src"); try { el.load(); } catch (e) {} }
         if (engine === "src") {
             try { el.pause(); } catch (e) {}
             el.removeAttribute("src");
@@ -238,6 +321,12 @@ var Player = (function () {
     }
 
     function play(it, note, startAt) {
+        if (item && item.live && told) {
+            Log.report("直播", "离开 " + item.room + "：看了 " + Math.round((Date.now() - switchAt) / 1000) + " 秒，中途停了 " + liveStalls.length + " 次" +
+                       (liveStalls.length ? "（" + liveStalls.join("/") + "ms）" : "") + "（" + (engine === "flv" ? "mpegts·FLV" : "<video>·m3u8·LIVE_BACK=" + LIVE_BACK) + "）");
+        }
+        liveWait = 0;
+        liveStalls = [];
         gen++;
         playNote = note || "";
         item = it;
@@ -250,7 +339,12 @@ var Player = (function () {
         lastBytes = -1;
         srcProgress = 0;
         stuckSince = Date.now();
-        if (useMse(it)) { playMse(it, startAt); } else { playSrc(it, startAt); }
+        clearTimeout(flvTimer);
+        if (it.live && it.flv) {
+            try { el.pause(); } catch (e) {}
+            var g = gen;
+            flvTimer = setTimeout(function () { if (g === gen) { playFlv(it); } }, FLV_DELAY);
+        } else if (useMse(it)) { playMse(it, startAt); } else { playSrc(it, startAt); }
     }
 
     /* 播放头前面还有几秒缓冲（MSE 下只算这一条的槽里、播放头所在的那一段）。 */
@@ -274,7 +368,7 @@ var Player = (function () {
         if (!item || paused) { stuckSince = 0; return; }
         if (el.currentTime !== lastTime) { lastTime = el.currentTime; stuckSince = Date.now(); return; }
         var waiting = !told || ahead() < 2;
-        var bytes = !waiting ? -1 : engine === "mse" || useMse(item) ? Mse.fetched(item) : srcProgress;
+        var bytes = !waiting ? -1 : engine === "flv" ? flvTicks : engine === "mse" || useMse(item) ? Mse.fetched(item) : srcProgress;
         if (waiting && bytes !== lastBytes) { lastBytes = bytes; stuckSince = Date.now(); }
         if (!stuckSince) { stuckSince = Date.now(); return; }
         var capped = !told && Date.now() - switchAt > FIRST_CAP;
@@ -300,6 +394,8 @@ var Player = (function () {
         on: function (name, fn) { handlers[name] = fn; },
 
         play: play,
+        /* 自测 --live：轮换起播时离直播末端留几秒。 */
+        setLiveBack: function (n) { LIVE_BACK = n; },
         /* 这一条会不会走 MSE（app 按它选切换动画）。 */
         mseFor: function (it) { return useMse(it); },
 
@@ -310,7 +406,7 @@ var Player = (function () {
          *            退回 range 的效果（起播用跳转接口）。
          * 两种哪个更快是 2026-09-29 的实验，自测构建里轮换比较，见 app.js 的 schedulePreload。 */
         preload: function (it, mode) {
-            if (!it) { return; }
+            if (!it || it.live) { return; }        // 直播没有「开头」可焐；第二个媒体元素又不许有
             /* MSE：预热 = 取开头、转封装、append 进它的槽，切过去只剩一次 seek。只在 MSE 管线已经在用时
              * 做 —— src 放着的时候去建 MediaSource 会把元素抢走。 */
             if (engine === "mse" && useMse(it)) { Mse.prepare(it).catch(function () {}); return; }
@@ -394,8 +490,10 @@ var Player = (function () {
         stop: function (release) {
             gen++;
             item = null;
+            clearTimeout(flvTimer);
             if (engine === "mse" && !release) { try { el.pause(); } catch (e) {} return; }
             if (engine === "mse") { Mse.detach(); }
+            stopFlv();                 // 直播不留着：暂停了它也一直在下（去「我」、网格页的时候）
             engine = "";
             mseE = null;
             place(null);

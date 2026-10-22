@@ -1,8 +1,9 @@
 /* 网格页：上面是头部（头像、名字、一行数字、一段说明），下面是 3:4 竖卡片的网格，遥控器上下左右选，确认键从这一条开始放
- * （放着的时候上下键在这一页的视频里刷）。三种页共用这一套（2026-10-18 从作者主页抽出来）：
+ * （放着的时候上下键在这一页的视频里刷）。四种页共用这一套（2026-10-18 从作者主页抽出来）：
  *   作者主页  暂停时选中作者、确认键进来（2026-09-30 用户要求）
  *   「我」    顶上一排：观看历史 · 喜欢 · 收藏 · 诊断日志 · 上传诊断日志 · 退出登录，前三排各一个网格（2026-10-18）
  *   合集      暂停时选中「合集」、确认键进来：选集，焦点落在正在看的那一集（2026-10-18）
+ *   精选      标签自己就是这一页，没有头部；16:9 三列宽卡片，照 bilibili-tizen 的首页（2026-10-22 用户要求：精选不上下滑，像手机上一样挑着看）
  * 页和页之间怎么走（一摞页，返回键一层层退）在 app.js，这里只管一页画什么、焦点在哪。
  *
  * 作者资料接口 2026-09-30 在全新匿名测试台（spike/desktop-harness，MODE=author）里问过：
@@ -16,8 +17,11 @@ var Grid = (function () {
     /* 4 列（用户 09-30 看了 6 列嫌小）、3:4 竖卡片（用户要和抖音官方一致；接口给的封面第一个地址就是官方裁好的
      * 3:4 小图 cropcenter:323:430）。一屏只放得下一整行，所以焦点行钉在 ANCHOR：上面露一截上一行、下面露大半行下一行，
      * 上下键每次正好滚一行。网格从哪一行开始（top）每种页不一样：「我」上面还有一排。 */
-    var COLS = 4, CW = 398, CH = 531, GAP = 36, LEFT = 110, ANCHOR = 120;
-    var ROW = CH + GAP;
+    var TALL = {cols: 4, cw: 398, ch: 531, gap: 36, left: 110, anchor: 120, wide: false};
+    /* 精选：三列 576 宽、间距 32、左右各 64，正好铺满 1920（bilibili-tizen 首页的尺寸，它在 65 寸上从沙发看量过：四列时标题糊成一片）。
+     * 卡片里 16:9 的图 556×313，下面两行标题、一行灰字（@作者 · 赞 · 多久以前），时长贴在图的右下角。一屏放得下两行。 */
+    var WIDE = {cols: 3, cw: 576, ch: 463, gap: 32, left: 64, anchor: 120, wide: true};
+    function row(g) { return g.ch + g.gap; }
     /* 翻动时的帧（2026-09-30 用户说往下滚「有点卡顿」）：按键后 450ms 里 rAF 的间隔。合成层临时提起 / 放下、新露出来的
      * 部分要光栅化时，主线程的帧会被顶住，长间隔就是看得见的卡。自测 --grid 在同一轮里轮换 MODES，电视上各滚 24 次：
      *   旧     最长帧间隔中位 167ms，掉帧 264，长任务 3872ms —— 250ms 的滚动里卡住六分之一秒
@@ -41,6 +45,20 @@ var Grid = (function () {
         return String(n || 0);
     }
     function first(list) { return list && list.url_list && list.url_list[0] || ""; }
+    function clock(ms) {
+        var s = Math.round(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+        return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (x < 10 ? "0" : "") + x;
+    }
+    function ago(sec) {
+        if (!sec) { return ""; }
+        var d = (Date.now() / 1000 - sec) / 86400;
+        if (d < 1 / 24) { return "刚刚"; }
+        if (d < 1) { return Math.floor(d * 24) + " 小时前"; }
+        if (d < 30) { return Math.floor(d) + " 天前"; }
+        var t = new Date(sec * 1000);
+        return (t.getFullYear() === new Date().getFullYear() ? "" : t.getFullYear() + "-") + (t.getMonth() + 1) + "-" + t.getDate();
+    }
+    function cardClass(p, on) { return (p.geo.wide ? "card wide" : "card") + (on ? " on" : ""); }
 
     /* 一页。tabs 只有「我」有：顶上一排，焦点在那一排时 zone 是 "tabs"。每一排各一个视频流（feeds[key]，第一次切过去才建）。
      *   playName / backName：放这一页的视频时顶上那行写什么（「@谁 的作品 · 返回键回到 TA 的主页」）
@@ -49,7 +67,7 @@ var Grid = (function () {
      *   want：打开时焦点要落在哪一条（合集：正在看的那一集），没取到就接着往后取 */
     function make(kind, o) {
         return {kind: kind, title: o.title || "", avatar: o.avatar || "", stats: o.stats || "", sign: o.sign || "",
-                top: o.tabs ? 380 : 300, tabs: o.tabs || null, tab: 0, zone: o.tabs ? "tabs" : "grid", feeds: {},
+                geo: o.geo || TALL, top: o.top || (o.tabs ? 380 : 300), tabs: o.tabs || null, tab: 0, zone: o.tabs ? "tabs" : "grid", feeds: {},
                 makeFeed: o.makeFeed, label: o.label || null, empty: o.empty || null, foot: o.foot || null, tabName: o.tabName || null,
                 playName: o.playName || "", backName: o.backName || "", want: o.want || "", wantTries: 0,
                 sel: 0, on: -1, offset: 0, cards: [], loading: false, err: ""};
@@ -136,7 +154,7 @@ var Grid = (function () {
             if (cur !== me || key(me) !== k) { return; }
             me.err = e.message;
             Log.report("网格", me.kind + (me.tabs ? "·" + k : "") + " 列表取不到（" + (Date.now() - t0) + "ms）：" + e.message);
-            Diag.incident(({author: "作者主页", me: "「我」", mix: "选集"}[me.kind] || me.kind) + (me.tabs ? "·" + me.tabs[me.tab].name : "") + "列表加载失败：" + e.message);
+            Diag.incident(({author: "作者主页", me: "「我」", mix: "选集", jingxuan: "精选"}[me.kind] || me.kind) + (me.tabs ? "·" + me.tabs[me.tab].name : "") + "列表加载失败：" + e.message);
             draw();
         });
     }
@@ -147,17 +165,26 @@ var Grid = (function () {
         var f = feedOf(me);
         var list = shown(me, f);
         var full = limit(me) && list.length >= limit(me);
-        var grid = $("gp-grid");
+        var grid = $("gp-grid"), g = me.geo;
         for (var i = me.cards.length; i < list.length; i++) {
             var it = list[i];
             var c = document.createElement("div");
-            c.className = "card";
-            c.style.left = (LEFT + (i % COLS) * (CW + GAP)) + "px";
-            c.style.top = (me.top + Math.floor(i / COLS) * ROW) + "px";
-            c.innerHTML = "<img><div class=\"shade\"></div><div class=\"d\"></div><div class=\"l\"></div>" + (it.top && me.kind === "author" ? "<div class=\"pin\">置顶</div>" : "");
-            c.firstChild.src = it.thumb || it.cover;
-            c.childNodes[2].textContent = it.desc;
-            c.childNodes[3].textContent = me.label ? me.label(it) : "♥ " + count(it.likes);
+            c.className = cardClass(me, false);
+            c.style.left = (g.left + (i % g.cols) * (g.cw + g.gap)) + "px";
+            c.style.top = (me.top + Math.floor(i / g.cols) * row(g)) + "px";
+            if (g.wide) {
+                /* 宽卡片用和视频同比例的那张封面（精选多是横屏，origin_cover 是 16:9）；thumb 是官方裁好的 3:4 小图，放不进 16:9。 */
+                c.innerHTML = "<div class=\"th\"><img><span class=\"dur\"></span></div><div class=\"tt\"></div><div class=\"by\"></div>";
+                c.firstChild.firstChild.src = it.cover || it.thumb;
+                c.firstChild.lastChild.textContent = it.dur ? clock(it.dur) : "";
+                c.childNodes[1].textContent = it.desc;
+                c.childNodes[2].textContent = [it.author ? "@" + it.author : "", "♥ " + count(it.likes), ago(it.time)].filter(function (x) { return x; }).join(" · ");
+            } else {
+                c.innerHTML = "<img><div class=\"shade\"></div><div class=\"d\"></div><div class=\"l\"></div>" + (it.top && me.kind === "author" ? "<div class=\"pin\">置顶</div>" : "");
+                c.firstChild.src = it.thumb || it.cover;
+                c.childNodes[2].textContent = it.desc;
+                c.childNodes[3].textContent = me.label ? me.label(it) : "♥ " + count(it.likes);
+            }
             grid.appendChild(c);
             me.cards.push(c);
         }
@@ -180,7 +207,7 @@ var Grid = (function () {
         }
         var ft = $("gp-foot");
         ft.textContent = msg;
-        ft.style.top = (n ? me.top + Math.ceil(n / COLS) * ROW + 10 : me.top + 120) + "px";
+        ft.style.top = (n ? me.top + Math.ceil(n / g.cols) * row(g) + 10 : me.top + 120) + "px";
         focus(false);
     }
 
@@ -200,14 +227,15 @@ var Grid = (function () {
         var on = me.zone === "grid" && n ? Math.min(me.sel, n - 1) : -1;
         if (on >= 0) { me.sel = on; }
         if (me.on !== on) {
-            if (me.cards[me.on]) { me.cards[me.on].className = "card"; }
-            if (on >= 0) { me.cards[on].className = "card on"; }
+            if (me.cards[me.on]) { me.cards[me.on].className = cardClass(me, false); }
+            if (on >= 0) { me.cards[on].className = cardClass(me, true); }
             me.on = on;
         }
         if (on < 0) { return scroll(0); }
-        var r = Math.floor(on / COLS), rows = Math.ceil(n / COLS);
+        var g = me.geo, R = row(g);
+        var r = Math.floor(on / g.cols), rows = Math.ceil(n / g.cols);
         /* 滚到底就不再往上推：最后一行和底下那行字贴着屏幕下沿，不留一大块空。 */
-        var off = r === 0 ? 0 : Math.min(me.top + r * ROW - ANCHOR, Math.max(0, me.top + rows * ROW + 70 - 1080));
+        var off = r === 0 ? 0 : Math.min(me.top + r * R - g.anchor, Math.max(0, me.top + rows * R + 70 - 1080));
         var scrolled = scroll(off);
         if (moved && r >= rows - 2) { more(); }
         return scrolled;
@@ -258,10 +286,13 @@ var Grid = (function () {
         if (f && !f.all().length) { more(); }
     }
 
-    /* 回 "left"：「我」顶上那一排最左边再往左 —— app.js 切到左边的标签。 */
+    /* 回 "left"：「我」顶上那一排最左边再往左 —— app.js 切到左边的标签。回 "right"：精选最右边那一列再往右（精选没有顶上那一排，
+     * 标签栏也不能选，这是离开它的路）。 */
     function move(dx, dy) {
         var me = cur;
         if (!me) { return ""; }
+        var cols = me.geo.cols;
+        if (me.kind === "jingxuan" && dx > 0 && (!me.cards.length || me.sel % cols === cols - 1 || me.sel + 1 >= me.cards.length)) { return "right"; }
         if (me.zone === "tabs") {
             if (dy > 0) { if (me.cards.length) { me.zone = "grid"; measure(focus(true)); } return ""; }
             if (dy < 0) { return ""; }
@@ -276,18 +307,18 @@ var Grid = (function () {
         }
         var n = me.cards.length, s = me.sel;
         if (dx) {
-            var col = s % COLS + dx;
-            if (col < 0 || col >= COLS || s + dx >= n) { return ""; }
+            var col = s % cols + dx;
+            if (col < 0 || col >= cols || s + dx >= n) { return ""; }
             s += dx;
         } else {
-            s += dy * COLS;
+            s += dy * cols;
             if (s < 0) {
                 if (me.tabs) { me.zone = "tabs"; focus(false); }
                 return "";
             }
             if (s >= n) {
                 /* 往下到了比这一行短的最后一行：落在最后一张上。已经在最后一行：去取下一页。 */
-                if (Math.floor((n - 1) / COLS) > Math.floor(me.sel / COLS)) { s = n - 1; }
+                if (Math.floor((n - 1) / cols) > Math.floor(me.sel / cols)) { s = n - 1; }
                 else { more(); return ""; }
             }
         }
@@ -389,10 +420,21 @@ var Grid = (function () {
         return p;
     }
 
+    /* 精选：标签自己的页（app.js 每次进这个标签都拿同一页，焦点、列表都还在）。视频流是 app 的那一个（feed.js 的 jingxuan，
+     * 带缓存），放的时候上下键接着在里面刷，返回键回到这里。 */
+    function jingxuan(getFeed) {
+        return make("jingxuan", {
+            geo: WIDE, top: 120, playName: "精选", backName: "列表",
+            makeFeed: function () { return getFeed(); },
+            empty: function () { return "精选暂时没有内容，按确认键重试"; }
+        });
+    }
+
     return {
         author: author,
         me: me,
         mix: mix,
+        jingxuan: jingxuan,
         /* 新开一页 / 回到这一页（sel：焦点落在第几张，回来时是刚才放的那一条；-1 不动）。 */
         open: render,
         show: function (p, sel) {
@@ -436,7 +478,7 @@ var Grid = (function () {
         state: function () {
             if (!cur) { return null; }
             var imgs = 0;
-            for (var i = 0; i < cur.cards.length; i++) { var im = cur.cards[i].firstChild; if (im.complete && im.naturalWidth > 0) { imgs++; } }
+            for (var i = 0; i < cur.cards.length; i++) { var im = cur.cards[i].querySelector("img"); if (im && im.complete && im.naturalWidth > 0) { imgs++; } }
             return {kind: cur.kind, name: cur.title, cards: cur.cards.length, imgs: imgs, sel: cur.sel, zone: cur.zone, tab: key(cur),
                     stats: $("gp-stats").textContent, avatar: $("gp-avatar").naturalWidth || 0, foot: $("gp-foot").textContent};
         }

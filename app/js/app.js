@@ -1,8 +1,11 @@
 /* 界面与遥控器。
  *
- * 顶部四个标签：精选 · 关注 · 推荐 · 我（默认进推荐）（像抖音 App 横滑切标签）。前三个是视频流，每个标签
- * 各记各的位置，切回来接着看；「我」登录了是观看历史 · 喜欢 · 收藏的网格（js/grid.js），没登录是扫码登录。
- * 未登录时「关注」也显示扫码登录。
+ * 顶部五个标签：精选 · 直播 · 关注 · 推荐 · 我（默认进推荐）（像抖音 App 横滑切标签）。直播、关注、推荐是上下刷的流，每个标签
+ * 各记各的位置，切回来接着看；精选是 16:9 三列的网格，挑一条看（2026-10-22 用户要求，像手机上的精选），放的时候上下键接着刷，
+ * 返回键回到网格；「我」登录了是观看历史 · 喜欢 · 收藏的网格（js/grid.js），没登录是扫码登录。
+ * 未登录时「关注」也显示扫码登录。精选的网格最右边那一列再按右键到「直播」（标签栏不能选，这是离开精选的路）。
+ * 直播（2026-10-22 用户要求）：上下键换直播间，暂停超过 20 秒再继续就从现在的画面重新开（直播窗口只有几秒，照 bilibili-tizen），
+ * 不能快进快退；右边那一列只有主播头像（红圈、「直播」），能进主播的主页；直播间的弹幕 / 评论没接。
  *
  * 遥控器：
  *   下键 / 频道减 → 下一条        上键 / 频道加 → 上一条
@@ -25,12 +28,13 @@
     };
 
     var TABS = [
-        {key: "jingxuan", name: "精选", feed: true},
+        {key: "jingxuan", name: "精选", feed: false, grid: true},
+        {key: "live", name: "直播", feed: true},
         {key: "follow", name: "关注", feed: true, needLogin: true},
         {key: "recommend", name: "推荐", feed: true},
         {key: "me", name: "我", feed: false}
     ];
-    var START_TAB = 2;         // 默认进「推荐」
+    var START_TAB = 3;         // 默认进「推荐」
 
     var $ = function (id) { return document.getElementById(id); };
     var tab = -1;
@@ -82,15 +86,18 @@
     var bootReady = null;     // 签名桥 + 登录态；「关注」「我」要等它
     var bootStartBridge = null;   // 有缓存时，第一帧出来就调它起签名桥
 
+    var jxPage = null;        // 精选那一页（js/grid.js）：每次进这个标签都是它，焦点和列表都还在
     function makeFeeds() {
         feeds = {};
         resumeAt = {};
         for (var i = 0; i < TABS.length; i++) { if (TABS[i].feed) { feeds[TABS[i].key] = Feed.create(TABS[i].key); } }
+        feeds.jingxuan = Feed.create("jingxuan");
+        jxPage = null;
     }
     function topPage() { return pages.length ? pages[pages.length - 1] : null; }
     /* 正在放的视频流：最上面那一页在放就是它的，否则是标签的。 */
     function feed() { var e = topPage(); return e ? e.feed : feeds[TABS[tab].key]; }
-    var KIND_NAME = {author: "作者", me: "我", mix: "合集"};
+    var KIND_NAME = {author: "作者", me: "我", mix: "合集", jingxuan: "精选"};
     function where() { var e = topPage(); return e ? KIND_NAME[e.page.kind] : TABS[tab].name; }     // 「到画面」那行里的出处
 
     /* 「播放」那行里报视频有多老。老视频走冷存储（v*-colds.douyinvod.com），但实测不慢（CLAUDE.md），报出来备查。 */
@@ -111,12 +118,12 @@
 
     /* 信息层（作者、标题、进度）每次换视频都出来；标签栏只在切标签、暂停时出来 —— 上下刷的
      * 时候顶部冒出导航是打扰（2026-09-29 用户反馈）。暂停期间和非视频页上标签栏常驻；作者主页、选集上没有标签栏
-     * （它们是更深的一层），「我」上有（它就是一个标签）；评论侧栏开着时两个都收起来。 */
+     * （它们是更深的一层），「我」、精选上有（它们就是标签自己的页）；评论侧栏开着时两个都收起来。 */
     function showInfo(withTabs) {
         var cm = Comments.isOpen();
         setInfo(view === "feed" && !cm);
         var e = topPage();
-        var tabs = view === "grid" ? e.page.kind === "me" : !cm && (withTabs || view !== "feed" || Player.isPaused());
+        var tabs = view === "grid" ? e.root : !cm && (withTabs || view !== "feed" || Player.isPaused());
         $("tabs").className = tabs ? "show" : "";
         clearTimeout(infoTimer);
         infoTimer = setTimeout(function () {
@@ -156,6 +163,7 @@
     function chips(it) {
         if (!it) { return []; }
         var c = it.secUid ? ["author"] : [];
+        if (it.live) { return c; }                 // 直播间：只有主播头像（评论是直播间的弹幕，没接）
         var acts = Act.ready() || actTest;
         if (acts) { c.push("like"); }
         c.push("comment");
@@ -180,10 +188,11 @@
             el.style.display = shown === false ? "none" : "";
         };
         set("author", null, false, !!it.secUid || !!it.avatar);
-        set("like", count(it.likes), it.digged);
-        set("comment", count(it.comments));
-        set("collect", it.collects ? count(it.collects) : "收藏", it.collected);
-        set("share", it.shares ? count(it.shares) : "分享");
+        if (it.live) { $("act-author").className += " live"; }
+        set("like", count(it.likes), it.digged, !it.live);
+        set("comment", count(it.comments), false, !it.live);
+        set("collect", it.collects ? count(it.collects) : "收藏", it.collected, !it.live);
+        set("share", it.shares ? count(it.shares) : "分享", false, !it.live);
         set("mix", it.mix ? "合集 · " + it.mix.name + " · 第 " + it.mix.ep + " 集" + (it.mix.total ? " / 共 " + it.mix.total + " 集" : "") : "", false, !!it.mix);
     }
     /* 换一条时换头像。旧头像不许留到新图到之前（换 src 时 Chromium 先接着画旧图）：先藏起来，到了再亮；
@@ -368,7 +377,9 @@
         $("bar").style.width = "0";
         $("paused").className = "";
         $("progress").className = "";
-        $("time").className = "";
+        /* 直播间没有进度：那一行常驻写「直播中 · N 人在看」。 */
+        $("time").textContent = item.live ? "● 直播中" + (item.users ? " · " + item.users + " 人在看" : "") : "";
+        $("time").className = item.live ? "show live" : "";
         showInfo();
     }
 
@@ -474,7 +485,8 @@
             if (tab !== myTab || view !== "feed" || feed() !== f) { return; }   // 等的时候观众切走了（或进出了网格页）
             $("loading").className = "";
             Log.report("播放", f.name + " #" + f.position() + " " + cause + " " + item.id + " " + Diag.priv(item.author || "") + " " +
-                       Diag.priv(item.desc.slice(0, 20)) + " " + item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s" + age(item) +
+                       Diag.priv(item.desc.slice(0, 20)) + " " + (item.live ? "直播 " + (item.users || "?") + " 人 " + item.url.split("?")[0].split("/").slice(2, 3)[0] :
+                       item.w + "x" + item.h + " " + Math.round(item.dur / 1000) + "s" + age(item)) +
                        (item.mix ? " 合集第 " + item.mix.ep + " 集" : ""));
             show(item, 0, cause === "下键" || cause === "播完" ? "up" : "");
         }, function (e) {
@@ -504,11 +516,20 @@
         show(item, 0, "down");
     }
 
+    var pausedAt = 0;
     function togglePause() {
+        var it = current();
+        /* 直播暂停久了，播放头早落在直播窗口外面：从现在的画面重新开（照 bilibili-tizen，20 秒）。 */
+        if (it && it.live && Player.isPaused() && Date.now() - pausedAt > 20000) {
+            Log.report("播放", "直播暂停了 " + Math.round((Date.now() - pausedAt) / 1000) + " 秒，重新连 " + it.room);
+            show(it, 0, "");
+            return;
+        }
         var p = Player.toggle();
+        if (p) { pausedAt = Date.now(); }
         $("paused").className = p ? "show" : "";
-        $("progress").className = p ? "show" : "";
-        $("time").className = p ? "show" : "";
+        $("progress").className = p && !(it && it.live) ? "show" : "";
+        $("time").className = it && it.live ? "show live" : p ? "show" : "";
         chip = -1;
         showInfo(p);
         paintActs();
@@ -686,6 +707,15 @@
         Grid.open(pages[0].page);
     }
 
+    /* 精选：标签自己的网格页。同一页对象一直留着（焦点、取到的列表），视频流是 feeds.jingxuan（带缓存，启动先放缓存里的）。 */
+    function showJingxuan() {
+        Player.stop();
+        if (!jxPage) { jxPage = Grid.jingxuan(function () { return feeds.jingxuan; }); }
+        pages = [{page: jxPage, feed: null, play: false, resume: null, at: 0, root: true}];
+        setView("grid");
+        Grid.open(jxPage);
+    }
+
     function indexOf(key) {
         for (var i = 0; i < TABS.length; i++) { if (TABS[i].key === key) { return i; } }
         return START_TAB;
@@ -707,6 +737,11 @@
         markTabs();
         var T = TABS[tab];
         Log.report("标签", T.name + "（" + cause + "）");
+        if (T.grid) {
+            showJingxuan();
+            showInfo(true);
+            return;
+        }
         if ((!T.feed || T.needLogin) && !Account.known()) {
             /* 登录态还没查出来（启动时签名桥在后台起）：先转圈，查到了再进。单独一个 "wait"
              * 视图 —— 冒充 "feed" 的那一版让 1.5 秒后的预热去找「我」的视频流，抛了
@@ -823,6 +858,8 @@
     }
     Player.on("ended", function () { next("播完"); });
     Player.on("progress", function (t, d) {
+        var it = current();
+        if (it && it.live) { return; }             // 那一行是「直播中 · N 人在看」，没有进度
         if (d && Player.state().id === watching.id) { watching.frac = Math.max(watching.frac, t / d); }
         if (d) { $("bar").style.width = (t / d * 100).toFixed(2) + "%"; }
         $("time").textContent = d ? clock(t) + " / " + clock(d) : "";
@@ -860,7 +897,7 @@
         }
         if (view === "grid") {
             if (k === KEY.LEFT) { if (Grid.move(-1, 0) === "left") { moveTab(-1); } }      // 只有「我」回 "left"
-            else if (k === KEY.RIGHT) { Grid.move(1, 0); }
+            else if (k === KEY.RIGHT) { if (Grid.move(1, 0) === "right") { moveTab(1); } }        // 只有精选回 "right"
             else if (k === KEY.UP) { Grid.move(0, -1); }
             else if (k === KEY.DOWN) { Grid.move(0, 1); }
             else if (k === KEY.ENTER || k === KEY.PLAY || k === KEY.PLAY_PAUSE) {
@@ -916,6 +953,7 @@
             return;
         }
         var inPage = !!topPage();
+        var live = !!(current() && current().live);    // 直播不能快进快退，暂停时左右键照样切标签
         switch (k) {
         case KEY.DOWN:
             /* 暂停时下键是选中右边那一列（从头像开始）。频道减键照旧是下一条。 */
@@ -932,15 +970,15 @@
             togglePause(); break;
         /* 在放网格页的视频时没有标签可切：左右键只把顶上那行「放的是什么 · 返回键回到哪」亮出来。 */
         case KEY.LEFT:
-            if (Player.isPaused()) { Player.seek(-10); showInfo(true); } else if (inPage) { showInfo(true); } else { moveTab(-1); }
+            if (Player.isPaused() && !live) { Player.seek(-10); showInfo(true); } else if (inPage) { showInfo(true); } else { moveTab(-1); }
             break;
         case KEY.RIGHT:
-            if (Player.isPaused()) { Player.seek(10); showInfo(true); } else if (inPage) { showInfo(true); } else { moveTab(1); }
+            if (Player.isPaused() && !live) { Player.seek(10); showInfo(true); } else if (inPage) { showInfo(true); } else { moveTab(1); }
             break;
         case KEY.REW:
-            Player.seek(-10); showInfo(); break;
+            if (!live) { Player.seek(-10); } showInfo(); break;
         case KEY.FF:
-            Player.seek(10); showInfo(); break;
+            if (!live) { Player.seek(10); } showInfo(); break;
         default:
             return;
         }

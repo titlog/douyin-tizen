@@ -28,7 +28,9 @@
 
 ## 能做的
 
-- **精选 / 关注 / 推荐 / 我** 四个标签，上下键刷，播完自动下一条；每个标签各记各的位置。
+- **精选 / 直播 / 关注 / 推荐 / 我** 五个标签。关注、推荐上下键刷，播完自动下一条；每个标签各记各的位置。
+- **精选**：三列网格挑着看，看的时候上下键接着刷，返回键回到网格。
+- **直播**：上下键换直播间，进一个直播间 1 秒多出画面。
 - **扫码登录**：官网的登录页在隐藏框里打开，二维码搬到电视上放大。
 - **「我」**：观看历史、喜欢、收藏三排网格 —— 手机上刷到收藏了的，坐到沙发上在电视上放。
 - **暂停时按下键**选中右边那一列的头像，上下键往下走、确认键进：
@@ -138,7 +140,9 @@ MIT。`app/js/vendor/mp4box.js` 是 BSD-3-Clause，见 [`mp4box.LICENSE`](app/js
 A Douyin (TikTok China) client for Samsung Tizen TVs, driven by the remote. The TV talks to Douyin directly —
 no backend, no proxy, no server; the login stays on the set.
 
-- Four tabs (featured / following / recommended / me), up and down to browse, autoplay next.
+- Five tabs (featured / live / following / recommended / me). Following and recommended: up and down to browse, autoplay next.
+- Featured is a three-column grid to pick from; while watching, up and down keep browsing, Back returns to the grid.
+- Live: up and down to change rooms; a room shows picture in a little over a second.
 - QR sign-in: the official login page runs in a hidden frame and its QR code is shown full size on the TV.
 - "Me": your watch history, likes and favourites as grids — save it on the phone, watch it on the TV.
 - Pause and press down to pick the uploader (profile and videos), the series (episode list, continues from the

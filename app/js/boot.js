@@ -30,7 +30,7 @@ var Boot = (function () {
     /* 安装包的加载顺序，排在 config.js（它有自己的标签：deploy.sh 改写它）和这个文件之后。
      * tools/lint.mjs 从这里读；更新包带着自己的一份，所以一个版本可以加文件。 */
     var SCRIPTS = ["diag.js", "log.js", "bridge.js", "feed.js", "account.js", "login.js", "grid.js", "act.js", "comments.js",
-                   "vendor/mp4box.js", "mse.js", "player.js", "update.js", "app.js", "selftest.js", "msespike.js"];
+                   "vendor/mp4box.js", "mse.js", "vendor/mpegts.js", "player.js", "update.js", "app.js", "selftest.js", "msespike.js"];
 
     var K_BUNDLE = "dy.update.bundle", K_META = "dy.update.meta",
         K_BOOTING = "dy.update.booting", K_BAD = "dy.update.bad", K_CSP = "dy.update.csp";

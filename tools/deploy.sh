@@ -19,6 +19,9 @@ for a in "$@"; do
     --cold) SELFTEST='"cold"' ;;      # 作者主页里挑一年以前的视频挨个点开，量冷存储多慢（约 5 分钟）
     --ab) SELFTEST='"ab"' ;;      # 同一轮里逐条轮换两种切换动画，连刷 30 条（约 4 分钟）
     --mse) SELFTEST='"mse"' ;;    # MSE 常驻管线探测：换 src 和 seek 到预塞的时间槽，同一轮对比（约 3 分钟）
+    --live) SELFTEST='"live"' ;;      # 直播：逐个直播间轮换起播时离直播末端留 0 / 10 秒，每个看 15 秒比卡顿（约 3 分钟）
+    --livemse) SELFTEST='"livemse"' ;;  # 直播走 mpegts.js（FLV → MSE）：每个直播间开始到动起来、之后 15 秒卡不卡，两种配置轮换（约 4 分钟）
+    --splice) SELFTEST='"splice"' ;;  # 切换能不能不 seek：WebCodecs 软解第一帧、把下一条剪接在播放头后面、对照 seek（约 3 分钟）
     --seek) SELFTEST='"seek"' ;;  # 长视频里来回跳到没缓冲的地方，量 seek 多久（约 3 分钟）
     --probe) SELFTEST='"probe"' ;;  # 登录态下把「我」页、合集、评论的接口各问一次，只报形状，只读（约 20 秒）
     --me) SELFTEST='"me"' ;;        # 「我」（观看历史 · 喜欢 · 收藏）、合集选集、评论侧栏；要已登录，只读（约 2 分钟）

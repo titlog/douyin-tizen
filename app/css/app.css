@@ -91,6 +91,14 @@ iframe.bridge { position: absolute; left: 0; top: 0; width: 1px; height: 1px; bo
 }
 #act-author .tip { top: 28px; right: 128px; }
 #rail .act.focus .tip { display: block; }
+/* 直播间（2026-10-22）：头像套红圈、下面一个「直播」标签，像手机上一样；选中时外面再一圈白。数字那几个不显示。 */
+#act-author.live { box-shadow: 0 0 0 5px #fe2c55; }
+#act-author.live.focus { box-shadow: 0 0 0 5px #fe2c55, 0 0 0 10px #fff; }
+#act-author.live::after {
+  content: "直播"; position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%);
+  padding: 0 12px; border-radius: 6px; background: #fe2c55; font-size: 20px; font-weight: bold; line-height: 28px; text-shadow: none; white-space: nowrap;
+}
+#time.live { opacity: 0.9; }
 
 /* 进度条只在暂停时出来（用户要求：播放时底部一条进度是打扰）。 */
 #progress { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: rgba(255, 255, 255, 0.15); display: none; }
@@ -194,6 +202,24 @@ iframe.bridge { position: absolute; left: 0; top: 0; width: 1px; height: 1px; bo
 #gp-tabs .t.focus { background: #fe2c55; }
 /* 选集：头像那块放合集的封面，方的。 */
 #grid-page.mix #gp-avatar { border-radius: 12px; }
+
+/* 精选（2026-10-22）：标签自己的页，没有头部，16:9 三列宽卡片（照 bilibili-tizen 首页：576 宽、间距 32、左右各 64，js/grid.js 的 WIDE）。
+ * 顶上是标签栏，往下翻时卡片会从它底下经过：垫一条渐变的底色挡住（纯色 + 渐变，不是滤镜）。 */
+#grid-page.jingxuan #gp-avatar, #grid-page.jingxuan #gp-name, #grid-page.jingxuan #gp-stats, #grid-page.jingxuan #gp-sign { display: none; }
+#grid-page.jingxuan::before {
+  content: ""; position: absolute; left: 0; top: 0; width: 1920px; height: 116px; z-index: 1;
+  background: linear-gradient(#161823 72%, rgba(22, 24, 35, 0));
+}
+#gp-grid .card.wide { width: 576px; height: 463px; padding: 10px; box-sizing: border-box; border-radius: 18px; background: transparent; overflow: visible; }
+#gp-grid .card.wide.on { transform: scale(1.03); box-shadow: 0 0 0 5px #fff; background: rgba(255, 255, 255, 0.08); }
+#gp-grid .card.wide .th { position: relative; width: 556px; height: 313px; border-radius: 10px; overflow: hidden; background: #2a2c38; }
+#gp-grid .card.wide .dur { position: absolute; right: 10px; bottom: 10px; padding: 2px 12px; border-radius: 6px; background: rgba(0, 0, 0, 0.72); font-size: 23px; }
+#gp-grid .card.wide .dur:empty { display: none; }
+#gp-grid .card.wide .tt {
+  margin-top: 12px; font-size: 29px; line-height: 40px; height: 80px; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+#gp-grid .card.wide .by { margin-top: 6px; font-size: 23px; line-height: 32px; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 评论侧栏（js/comments.js）：盖在画面右边，视频停在左边。列表只动 #cm-list 的 transform，常驻一个合成层（作者主页网格
  * 量过：不常驻的话每滚一次都整块重新光栅化）。 */

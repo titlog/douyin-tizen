@@ -114,7 +114,7 @@ var Feed = (function () {
      *                                       看到 95% 以上为 1）—— 只在登录时发，未登录官网也不发（它会回 8）
      * 自测构建不报也不记：它刷得飞快，几十条「秒划」记进账号的观看历史会带偏推荐。 */
     function played(item, pre) {
-        if (selftest()) { return; }
+        if (selftest() || item.live) { return; }       // 直播间不是作品：没有播放数、观看历史可报
         if (!isWatched(item.id)) { bump("played"); }
         markWatched(item.id);
         var enc = encodeURIComponent;
@@ -208,8 +208,50 @@ var Feed = (function () {
         };
     }
 
+    /* 直播间（2026-10-22 用户要「再加一个直播的 tab，上下滑动切换」）。/webcast/feed/ 的 data[] 每项是 {type: 1, data: 房间}，房间里直接
+     * 带着拉流地址：flv_pull_url、hls_pull_url_map 各四档（FULL_HD1 蓝光 1088p、HD1 超清、SD2 高清、SD1 标清），不签名、不认 Referer
+     * （和点播的跳转接口一样，开发机 curl 直接取到）。**编码几乎全是 H.265**（live_core_sdk_data 里各档的 VCodec；只有 240p 那一档是
+     * H.264，不声明 HEVC 也一样），HLS 是 MPEG-TS 分片、每片 ~3.7 秒。放法交给 Player：直播间走 src（<video> 直接放 m3u8）。
+     * 宽高接口没给，按 stream_orientation 猜（1 竖屏手机直播，2 横屏），只用来摆封面。 */
+    function normaliseLive(x, why) {
+        var r = x && x.data;
+        if (!r || !r.id_str) { why.push("空"); return null; }
+        var su = r.stream_url || {}, hls = su.hls_pull_url_map || {}, flv = su.flv_pull_url || {}, o = r.owner || {};
+        var url = hls.FULL_HD1 || hls.HD1 || hls.SD2 || hls.SD1 || su.hls_pull_url || "";
+        if (!url) { why.push("没有 HLS 地址"); return null; }
+        var land = su.stream_orientation === 2;
+        var users = r.user_count_str || (r.stats && r.stats.user_count_str) || "";
+        return {
+            id: "room" + r.id_str, room: r.id_str, live: true,
+            desc: r.title || "", author: o.nickname || "", secUid: o.sec_uid || "", uid: o.id_str || "",
+            avatar: first(o.avatar_thumb), cover: first(r.cover), thumb: first(r.cover), coverKind: "直播封面",
+            url: url, flv: flv.FULL_HD1 || flv.HD1 || flv.SD2 || flv.SD1 || "",     // 每个地址带自己的 sign，不能从 HLS 地址改出来（403）
+            w: land ? 1920 : 1080, h: land ? 1080 : 1920, dur: 0, time: r.create_time || 0,
+            users: users, likes: 0, comments: 0, collects: 0, shares: 0, digged: false, collected: false, mix: null, type: 0, uri: ""
+        };
+    }
+    /* 官网直播首页那一次请求的参数，原样。不照抄的话（action=refresh、is_ssr=false、enter_source 留空……）签名都对，回的是
+     * status_code=0 + 空的 data（2026-10-22 全新匿名测试台里逐项比出来的；cookie 一个都不用补）。主站的签名桥直接问
+     * www.douyin.com/webcast/feed/ 就行，不用去 live.douyin.com。翻页：上一页 extra.max_time 当 maxtime，每页约一半重复，按房间号去重。 */
+    var LIVE_Q = {app_name: "douyin_web", live_id: "1", device_platform: "web", language: "zh-CN", enter_from: "link_share", request_tag_from: "web",
+                  need_map: "1", liveid: "1", is_draw: "1", inner_from_drawer: "0", custom_count: "20", action: "load_more", action_type: "loadmore",
+                  enter_source: "web_homepage_hot_web_live_card", source_key: "web_homepage_hot_web_live_card", is_ssr: "true"};
+
     /* 每种流：怎么问下一页、怎么从应答里拿出条目。page 是这个实例自己的翻页状态。 */
     var KINDS = {
+        live: {
+            name: "直播",
+            norm: normaliseLive,
+            fetch: function (page) {
+                var q = {maxtime: String(page.maxtime || 0)};
+                for (var k in LIVE_Q) { if (LIVE_Q.hasOwnProperty(k)) { q[k] = LIVE_Q[k]; } }
+                return Bridge.get("/webcast/feed/", q).then(function (j) {
+                    var ex = j.extra || {};
+                    page.maxtime = ex.max_time || page.maxtime || 0;
+                    return {list: Array.isArray(j.data) ? j.data : [], more: ex.has_more !== false, status: j.status_code};
+                });
+            }
+        },
         recommend: {
             name: "推荐",
             cache: true,
@@ -341,7 +383,7 @@ var Feed = (function () {
                 more = r.more;
                 var added = 0, dup = 0, old = 0, fresh = 0, why = [];
                 for (var i = 0; i < r.list.length; i++) {
-                    var it = normalise(r.list[i], why);
+                    var it = (K.norm || normalise)(r.list[i], why);
                     if (!it) { continue; }
                     if (seen[it.id]) { dup++; continue; }
                     if (K.skipWatched && isWatched(it.id)) { seen[it.id] = true; old++; continue; }

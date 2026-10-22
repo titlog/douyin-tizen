@@ -233,7 +233,8 @@
             key(KEY.FF);
             return wait(1500).then(function () {
                 var b = st().t;
-                check("快进键 +10 秒", b - a > 8 && b - a < 14, a.toFixed(1) + " → " + b.toFixed(1));
+                /* 快进对齐到最近的关键帧（mse.js 的 seekTo），±10 秒实际落在 ±6.5–13.5 秒；播着量，再加上等的 1.5 秒（2026-10-22 电视上 +14.1 判错过）。 */
+                check("快进键 +10 秒", b - a > 6 && b - a < 15.5, a.toFixed(1) + " → " + b.toFixed(1));
             });
         }).then(function () {
             /* 左右键播放时切标签、暂停时快进 —— 这里测后一半。 */
@@ -243,7 +244,8 @@
                 key(KEY.RIGHT);
                 return wait(1500).then(function () {
                     var b = st().t;
-                    check("暂停时右键是快进", b - a > 8 && b - a < 14 && window.__app.tab() === "recommend", a.toFixed(1) + " → " + b.toFixed(1) + "，标签=" + window.__app.tab());
+                    /* 暂停着量：只有关键帧对齐那一截，6.5–13.5 秒（电视上 +6.9 判错过）。 */
+                    check("暂停时右键是快进", b - a > 6 && b - a < 14 && window.__app.tab() === "recommend", a.toFixed(1) + " → " + b.toFixed(1) + "，标签=" + window.__app.tab());
                     key(KEY.ENTER);
                     return wait(1000);
                 });
@@ -275,7 +277,7 @@
                 check("连刷十条", bad === 0, "出画面中位数 " + med + "ms，最慢 " + (slow[slow.length - 1] || -1) + "ms，失败 " + bad + " | 全部=" + slow.join(","));
             });
         }).then(function () {
-            /* 标签顺序：精选 · 关注 · 推荐 · 我。预期跟着登录态走：已登录时「关注」能播、「我」是
+            /* 标签顺序：精选 · 直播 · 关注 · 推荐 · 我。预期跟着登录态走：已登录时「关注」能播、「我」是
              * 观看历史那些（焦点在顶上那一排，左键回推荐）；未登录时两个都出二维码。 */
             var recId = st().id, recT = st().t;
             var logged = Account.loggedIn();
@@ -306,15 +308,39 @@
                 }
                 check("未登录时「关注」出二维码", window.__app.tab() === "follow" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
             }).then(function () {
-                key(KEY.LEFT);                       // 到精选
-                return waitShown(st().id, 20000);
+                key(KEY.LEFT);                       // 到直播（2026-10-22）：<video> 直接放 m3u8（TS，H.265）
+                var before = st().id;
+                return waitShown(before, 25000);
             }).then(function (ms) {
                 return longestStall(6000).then(function (stall) {
-                    check("「精选」能播", window.__app.tab() === "jingxuan" && ms >= 0 && stall < 3000, "出画面 " + ms + "ms，最长停顿 " + stall + "ms");
+                    var it = window.__app.current() || {};
+                    check("「直播」能播", window.__app.tab() === "live" && ms >= 0 && stall < 3000 && !!it.live,
+                          "出画面 " + ms + "ms，最长停顿 " + stall + "ms，" + (it.users || "?") + " 人在看，" + st().engine + "，" + st().vw + "x" + st().vh);
+                });
+            }).then(function () { return switchStep("直播里下一个直播间", KEY.DOWN); })
+              .then(function () {
+                key(KEY.LEFT);                       // 到精选：三列网格，挑着看（2026-10-22）
+                return waitFor(function () { var g = Grid.state(); return g && g.kind === "jingxuan" && g.cards > 0 && g.imgs >= Math.min(g.cards, 3); }, 20000);
+            }).then(function (ms) {
+                var g = Grid.state() || {};
+                check("「精选」是网格、封面出来了", window.__app.tab() === "jingxuan" && window.__app.view() === "grid" && ms >= 0,
+                      ms + "ms，" + g.cards + " 张卡片、封面 " + g.imgs + "，焦点 #" + g.sel);
+                var before = st().id;
+                key(KEY.RIGHT);                      // 挑第二张
+                return wait(400).then(function () { key(KEY.ENTER); return waitShown(before, 20000); });
+            }).then(function (ms) {
+                return longestStall(6000).then(function (stall) {
+                    check("精选里挑一条能播", window.__app.view() === "feed" && ms >= 0 && stall < 3000,
+                          "出画面 " + ms + "ms，最长停顿 " + stall + "ms，顶上「" + document.getElementById("tabs").textContent + "」");
                 });
             }).then(function () { return switchStep("精选里下一条", KEY.DOWN); })
               .then(function () {
-                key(KEY.RIGHT); key(KEY.RIGHT);      // 经过关注回到推荐
+                key(KEY.RETURN);                     // 回到网格，焦点在刚才放的那条（第三张，最右边那一列）
+                return wait(800);
+            }).then(function () {
+                var g = Grid.state() || {};
+                check("返回键回到精选网格、焦点跟着刚才那条", window.__app.view() === "grid" && g.sel === 2, "视图=" + window.__app.view() + "，焦点 #" + g.sel);
+                key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT);      // 最右边那一列再右：到直播，再右：关注，再右：回到推荐
                 return waitShown("", 15000);
             }).then(function () {
                 return wait(2500).then(function () {
@@ -1067,7 +1093,51 @@
         }).then(function () { R("结束"); }, function (e) { R("中止：" + e.message); });
     }
 
-    var MODES = {soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
-    if (SELFTEST === "mse") { return; }                 // js/msespike.js 自己跑
+    /* --live（2026-10-22）：直播起播后卡（电视上 6 秒里停 3.5–5.8 秒）。同一轮里逐个直播间轮换「起播时离直播末端留 0 / 10 秒」
+     * （Player.setLiveBack），每个看 15 秒，量最长停顿和停了几次。推荐 → 左 → 关注 → 左 → 直播。 */
+    function liveRun() {
+        var N = 8, i = 0, ARMS = [0, 10], res = {0: [], 10: []};
+        function measure(arm, ms) {
+            var t0 = Date.now(), worst = 0, since = 0, stops = 0, last = st();
+            function poll() {
+                if (Date.now() - t0 >= 15000) {
+                    worst = Math.max(worst, since ? Date.now() - since : 0);
+                    res[arm].push({ms: ms, worst: worst, stops: stops});
+                    Log.report("LIVE", "留 " + arm + " 秒：出画面 " + ms + "ms，15 秒里停 " + stops + " 次、最长 " + worst + "ms | " + JSON.stringify({vw: st().vw, buffered: st().buffered.toFixed(1), t: st().t.toFixed(1)}));
+                    return Promise.resolve();
+                }
+                return wait(200).then(function () {
+                    var s = st();
+                    var frozen = s.shown && !s.paused && s.t === last.t;
+                    if (frozen) { if (!since) { since = Date.now(); stops++; } } else if (since) { worst = Math.max(worst, Date.now() - since); since = 0; }
+                    last = s;
+                    return poll();
+                });
+            }
+            return poll();
+        }
+        function one() {
+            if (i >= N) { return Promise.resolve(); }
+            var arm = ARMS[i % 2];
+            Player.setLiveBack(arm);
+            var before = st().id;
+            if (i === 0) { key(KEY.LEFT); key(KEY.LEFT); } else { key(KEY.DOWN); }
+            i++;
+            return waitShown(before, 30000).then(function (ms) { return measure(arm, ms); }).then(one);
+        }
+        return waitShown("", 40000).then(function () { return wait(3000); }).then(one).then(function () {
+            ARMS.forEach(function (a) {
+                var g = res[a];
+                Log.report("LIVE", "留 " + a + " 秒（" + g.length + " 个直播间）：出画面 中位 " + median(g.map(function (r) { return r.ms; })) + "ms，最长停顿 中位 " +
+                           median(g.map(function (r) { return r.worst; })) + "ms，停了 共 " + g.reduce(function (x, r) { return x + r.stops; }, 0) + " 次 | " +
+                           g.map(function (r) { return r.ms + "/" + r.worst + "/" + r.stops; }).join(" "));
+            });
+            Player.setLiveBack(10);
+            Log.report("LIVE", "结束");
+        }, function (e) { Log.report("LIVE", "中止：" + e.message); });
+    }
+
+    var MODES = {live: liveRun, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
+    if (SELFTEST === "mse" || SELFTEST === "splice" || SELFTEST === "livemse") { return; }   // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();
