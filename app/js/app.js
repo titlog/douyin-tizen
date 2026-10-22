@@ -89,6 +89,7 @@
     var bootStartBridge = null;   // 有缓存时，第一帧出来就调它起签名桥
 
     var jxPage = null;        // 精选那一页（js/grid.js）：每次进这个标签都是它，焦点和列表都还在
+    var liveLeftAt = 0, LIVE_STALE = 10 * 60000;    // 什么时候离开的直播；离开超过 10 分钟回来换一批直播间
     function makeFeeds() {
         feeds = {};
         resumeAt = {};
@@ -228,7 +229,7 @@
         var h = "";
         if (it && Player.isPaused() && !Comments.isOpen()) {
             var c = chips(it), k = c[chip];
-            h = chip < 0 ? "下键选中 " + c.map(function (x) { return CHIP_NAME[x]; }).join(" · ") :
+            h = !c.length ? "" : chip < 0 ? "下键选中 " + c.map(function (x) { return CHIP_NAME[x]; }).join(" · ") :
                 (k === "mix" ? chipHint(k, it) + " · " : "") + "上下键换 · 返回键取消";
         }
         $("hint").textContent = h;
@@ -583,7 +584,18 @@
     function playFromGrid() {
         var e = topPage();
         var i = Grid.selected();
-        if (i < 0) { Grid.retry(); return; }
+        if (i < 0) {
+            /* 精选一张卡片都没有（加载失败，或者服务器说没有更多了）：整个重来 —— Grid.retry 只是再取一页，has_more 是 0 时什么都不做。 */
+            if (e.page.kind === "jingxuan") {
+                Log.report("标签", "精选重试");
+                feeds.jingxuan = Feed.create("jingxuan");
+                jxPage = null;
+                showJingxuan();
+                return;
+            }
+            Grid.retry();
+            return;
+        }
         var f = Grid.feed();
         var it = f.jump(i);
         var at = e.resume && e.resume.id === it.id ? e.resume.t : 0;
@@ -744,10 +756,19 @@
         }
         if (Login.active()) { Login.stop(); }
         if (pages.length) { pages = []; Grid.close(); }
+        if (tab >= 0 && TABS[tab].key === "live" && i !== tab) { liveLeftAt = Date.now(); }
         tab = i;
         busy = false;
         markTabs();
         var T = TABS[tab];
+        /* 离开直播超过 LIVE_STALE 再回来：那一批直播间多半已经下播了（拉流地址也带着过期时间），接着放就是连着报错跳台、凑满五次还报
+         * 「网络问题」。换一批新的。 */
+        if (T.key === "live" && liveLeftAt && Date.now() - liveLeftAt > LIVE_STALE) {
+            Log.report("标签", "离开直播 " + Math.round((Date.now() - liveLeftAt) / 60000) + " 分钟，换一批直播间");
+            feeds.live = Feed.create("live");
+            resumeAt.live = 0;
+            liveLeftAt = 0;
+        }
         Log.report("标签", T.name + "（" + cause + "）");
         if (T.grid) {
             showJingxuan();
@@ -849,8 +870,11 @@
         if (sw && !sw.playing && sw.item.id !== playedId) {
             /* 和官网一样，一开始放就报（Feed.played：播放一次 + 观看历史），服务器才知道这台电视看过它。 */
             playedId = sw.item.id;
-            Feed.played(sw.item, {id: watching.id, seen: watching.frac >= 0.95});
-            watching = {id: sw.item.id, frac: 0};
+            /* 直播间不报、也不当「上一条」：它的编号（room…）不是作品 id，而 history/write 这个接口作废过登录（见 CLAUDE.md）。 */
+            if (!sw.item.live) {
+                Feed.played(sw.item, {id: watching.id, seen: watching.frac >= 0.95});
+                watching = {id: sw.item.id, frac: 0};
+            }
         }
         if (sw && !sw.playing) {
             sw.playing = true;
@@ -971,7 +995,7 @@
         switch (k) {
         case KEY.DOWN:
             /* 暂停时下键是选中右边那一列（从头像开始）。频道减键照旧是下一条。 */
-            if (Player.isPaused()) { if (current()) { setChip(0); } break; }
+            if (Player.isPaused()) { if (current() && chips(current()).length) { setChip(0); } break; }
             next("下键"); break;
         case KEY.CH_DOWN:
             next("下键"); break;

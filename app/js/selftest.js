@@ -1093,50 +1093,6 @@
         }).then(function () { R("结束"); }, function (e) { R("中止：" + e.message); });
     }
 
-    /* --live（2026-10-22）：直播起播后卡（电视上 6 秒里停 3.5–5.8 秒）。同一轮里逐个直播间轮换「起播时离直播末端留 0 / 10 秒」
-     * （Player.setLiveBack），每个看 15 秒，量最长停顿和停了几次。推荐 → 左 → 关注 → 左 → 直播。 */
-    function liveRun() {
-        var N = 8, i = 0, ARMS = [0, 10], res = {0: [], 10: []};
-        function measure(arm, ms) {
-            var t0 = Date.now(), worst = 0, since = 0, stops = 0, last = st();
-            function poll() {
-                if (Date.now() - t0 >= 15000) {
-                    worst = Math.max(worst, since ? Date.now() - since : 0);
-                    res[arm].push({ms: ms, worst: worst, stops: stops});
-                    Log.report("LIVE", "留 " + arm + " 秒：出画面 " + ms + "ms，15 秒里停 " + stops + " 次、最长 " + worst + "ms | " + JSON.stringify({vw: st().vw, buffered: st().buffered.toFixed(1), t: st().t.toFixed(1)}));
-                    return Promise.resolve();
-                }
-                return wait(200).then(function () {
-                    var s = st();
-                    var frozen = s.shown && !s.paused && s.t === last.t;
-                    if (frozen) { if (!since) { since = Date.now(); stops++; } } else if (since) { worst = Math.max(worst, Date.now() - since); since = 0; }
-                    last = s;
-                    return poll();
-                });
-            }
-            return poll();
-        }
-        function one() {
-            if (i >= N) { return Promise.resolve(); }
-            var arm = ARMS[i % 2];
-            Player.setLiveBack(arm);
-            var before = st().id;
-            if (i === 0) { key(KEY.LEFT); key(KEY.LEFT); } else { key(KEY.DOWN); }
-            i++;
-            return waitShown(before, 30000).then(function (ms) { return measure(arm, ms); }).then(one);
-        }
-        return waitShown("", 40000).then(function () { return wait(3000); }).then(one).then(function () {
-            ARMS.forEach(function (a) {
-                var g = res[a];
-                Log.report("LIVE", "留 " + a + " 秒（" + g.length + " 个直播间）：出画面 中位 " + median(g.map(function (r) { return r.ms; })) + "ms，最长停顿 中位 " +
-                           median(g.map(function (r) { return r.worst; })) + "ms，停了 共 " + g.reduce(function (x, r) { return x + r.stops; }, 0) + " 次 | " +
-                           g.map(function (r) { return r.ms + "/" + r.worst + "/" + r.stops; }).join(" "));
-            });
-            Player.setLiveBack(10);
-            Log.report("LIVE", "结束");
-        }, function (e) { Log.report("LIVE", "中止：" + e.message); });
-    }
-
     /* --abseek（2026-10-22）：切换时什么时候 seek。cover 动画（整页 250ms 盖上来）走到第几毫秒发 seek：200（原来，盖到 ~99.5%）/ 130
      * （~95%，顶上一条旧画面会冻住 / 变黑 ~120ms，要人眼看）逐条轮换。同时看：撤封面晚没晚（>100ms 算晚，主线程被顶住）、封面用上
      * 软解第一帧的有几次。 */
@@ -1167,7 +1123,7 @@
         }, function (e) { Log.report("AB", "中止：" + e.message); });
     }
 
-    var MODES = {abseek: abSeek, live: liveRun, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
+    var MODES = {abseek: abSeek, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
     if (SELFTEST === "mse" || SELFTEST === "splice" || SELFTEST === "livemse") { return; }   // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();

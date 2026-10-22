@@ -630,6 +630,7 @@
      * 可我们的 CSP 有 object-src 'none'，AVPlay 的 <object> 会被拦，而 CSP 不跟自动更新走。所以试 mpegts.js：网页里把 FLV（HEVC，
      * 编码号 12）转成 fMP4 交给 MSE，什么时候开始放我们说了算。量：开始到播放头走 0.1 秒多久、之后 15 秒停几次 / 最长多久、丢帧、
      * 前方缓冲（追不追得上直播）。每个直播间都是新建一个播放器（新的 MediaSource），和 app 里换直播间一样。 */
+    var mpegts = null;
     function liveRooms() {
         var f = Feed.create("live"), out = [];
         function step() {
@@ -753,7 +754,8 @@
             return typeof MP4Box !== "undefined" ? null : loadScript("js/vendor/mp4box.js");
         }).then(function () {
             if (SELFTEST !== "livemse") { return pick(); }
-            return (typeof mpegts !== "undefined" ? Promise.resolve() : loadScript("js/vendor/mpegts.js")).then(liveMain).then(function () { throw {done: true}; });
+            mpegts = MpegtsLib.get();       // vendor/mpegts.js 包了一层函数，只露 MpegtsLib
+            return liveMain().then(function () { throw {done: true}; });
         }).then(function (c) {
             clips = c;
             if (clips.length < 2) { throw new Error("只备好 " + clips.length + " 条，不够比"); }

@@ -379,6 +379,8 @@ var Mse = (function () {
     }
     /* 软件解第一帧 → 缩到画面大小 → canvas。失败了就没有，切换时照旧用封面图。 */
     function decodeFirst(e) {
+        /* 已经切过去（或正在切过去）的那条不解：它的第一帧当不了这次的封面，软解又正好压在撤封面那几百毫秒里。 */
+        if (e.urgent || e === cur) { e.key0 = null; return; }
         if (!CAN_FRAME || !e.key0 || !e.desc || e.frame || e.framing || e.dead) { return; }
         e.framing = true;
         var t0 = Date.now(), box = fit(e.vw, e.vh), done = false, dec = null;
@@ -457,7 +459,7 @@ var Mse = (function () {
             for (var i = from; i < sampleNum && !sync; i++) { sync = !!smp[i].is_sync; }
             e.segFrom[id] = sampleNum;
             enqueue(kind, {e: e, buf: buf, gen: e.gen, sync0: !!(smp[from] && smp[from].is_sync), sync: sync});
-            if (CAN_FRAME && kind === "video" && from === 0 && !e.key0 && !e.frame) {
+            if (CAN_FRAME && kind === "video" && from === 0 && !e.now && !e.key0 && !e.frame) {     // 现取的那条不解，不留
                 try { var s0 = f.getSample(f.getTrackById(id), 0); if (s0 && s0.data && s0.is_sync) { e.key0 = new Uint8Array(s0.data); } } catch (x) {}
             }
             try { f.releaseUsedSamples(id, sampleNum); } catch (x) {}
@@ -815,8 +817,9 @@ var Mse = (function () {
 
         /* 拆掉整个管线（退回 src、离开视频页、管线坏了重建之前）。 */
         detach: function () {
-            for (var id in items) { if (items.hasOwnProperty(id)) { items[id].dead = true; abort(items[id]); } }
+            for (var id in items) { if (items.hasOwnProperty(id)) { items[id].dead = true; abort(items[id]); items[id].frame = null; items[id].key0 = null; } }
             items = {};
+            framed = [];                    // 软解的第一帧（一张 1080p 8MB）跟着放掉，别留到直播的 MediaSource 建起来
             slots = [];
             cur = null;
             showGen++;

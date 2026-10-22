@@ -265,7 +265,8 @@ var Feed = (function () {
         },
         jingxuan: {
             name: "精选",
-            cache: true,
+            /* 不缓存（2026-10-22 起）：精选成了网格，挑第 10 张看，「只存位置之后的」那条规则就把前 9 张没看过的扔了；重开时网格只剩十几张
+             * 旧的、也不去取新的。精选也不是启动的那个标签，缓存原来是为冷启动的。 */
             skipWatched: true,
             fetch: function (page) {
                 return Bridge.post("/aweme/v2/web/module/feed/", {

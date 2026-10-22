@@ -96,11 +96,12 @@ var Player = (function () {
      *   mpegts.js FLV → MSE   开始到画面动起来中位 1.0 秒（741–1050ms），之后 15 秒里 4 个直播间 3 个一次没停（默认配置；「低延迟」那套
      *                         中位 0.75 秒，但 4 个里 3 个停了 0.4–0.6 秒）。电视的 MSE 认 hvc1 / hev1，画面 1080p。
      * 每个直播间新建一个播放器（它自己的 MediaSource）：和点播的 Mse 管线共用这一个 <video>，换过去之前先把另一边拆掉。 */
-    var flvP = null, flvTicks = 0, flvTimer = 0;
-    /* 进直播间先等这么久再动管线：连按左右键「路过」直播（精选 ↔ 推荐之间要经过它）的时候什么都不拆。2026-10-22 电视上自测连按三下
+    var flvP = null, flvTicks = 0, flvTimer = 0, flvItem = null, flvFailed = -1;
+    /* 从点播进直播间先等这么久再动管线：连按左右键「路过」直播（精选 ↔ 推荐之间要经过它）的时候什么都不拆。2026-10-22 电视上自测连按三下
      * 右键（精选 → 直播 → 关注 → 推荐），点播管线被拆掉、直播的建起来又拆掉、点播的冷启动再从中间 seek —— 那一下 seek 卡了 12 秒，
-     * 被看门狗跳过。路过不拆，回到推荐就是原地接着放。 */
-    var FLV_DELAY = 350;
+     * 被看门狗跳过。路过不拆，回到推荐就是原地接着放。直播间之间换台（已经是 flv）不等。等的这段 pendingLive：管线还是点播的，
+     * 它的事件、暂停键都不往直播间身上算。 */
+    var FLV_DELAY = 350, pendingLive = false;
     function stopFlv() {
         if (!flvP) { return; }
         var p = flvP;
@@ -110,7 +111,16 @@ var Player = (function () {
         try { p.detachMediaElement(); } catch (e) {}
         try { p.destroy(); } catch (e) {}
     }
+    /* 一个直播间只报一次错：mpegts 的网络错和媒体错、元素自己的 error 可能前后脚都来，报两次 app 就连跳两个台。 */
+    function failFlv(why) {
+        if (engine !== "flv" || !flvItem || flvFailed === gen) { return; }
+        flvFailed = gen;
+        Log.report("直播", "放不了：" + why + " | " + flvItem.room + " " + flvItem.flv.split("?")[0].split("/").slice(2, 3)[0]);
+        stopFlv();
+        if (handlers.error) { handlers.error("直播：" + why); }
+    }
     function playFlv(it) {
+        pendingLive = false;
         if (engine === "mse") { Mse.detach(); mseE = null; }
         else if (engine === "src") { try { el.pause(); } catch (e) {} el.removeAttribute("src"); try { el.load(); } catch (e) {} }
         stopFlv();
@@ -123,19 +133,19 @@ var Player = (function () {
             playSrc(it, 0);
             return;
         }
+        flvItem = it;
         try {
             flvP = lib.createPlayer({type: "flv", isLive: true, url: it.flv}, {enableWorker: false});
-            flvP.on(lib.Events.ERROR, function (type, detail, info) {
-                if (g !== gen) { return; }
-                Log.report("直播", "mpegts 出错 " + type + " " + detail + " " + (info && info.msg || "") + " | " + it.room + " " + it.flv.split("?")[0].split("/").slice(2, 3)[0]);
-                if (handlers.error) { handlers.error("直播：" + detail); }
-            });
-            /* 看门狗看「字节还在不在来」：统计信息每 ~600ms 来一次，来了就算有进展。 */
-            flvP.on(lib.Events.STATISTICS_INFO, function () { if (g === gen) { flvTicks++; } });
+            flvP.on(lib.Events.ERROR, function (type, detail, info) { if (g === gen) { failFlv("mpegts " + type + " " + detail + " " + (info && info.msg || "")); } });
+            /* 看门狗看「字节还在不在来」。统计信息是定时器每 600ms 发的、不管有没有收到字节，只有 speed（最近一秒 KB/s）> 0 才算进展 ——
+             * 只数事件的话，CDN 连接吊住、画面冻着，看门狗也永远不报。 */
+            flvP.on(lib.Events.STATISTICS_INFO, function (st) { if (g === gen && st && st.speed > 0) { flvTicks++; } });
             flvP.attachMediaElement(el);
             flvP.load();
-            var p = flvP.play();
-            if (p && p.catch) { p.catch(function () {}); }
+            if (!paused) {                       // 等的那 350ms 里按了暂停
+                var p = flvP.play();
+                if (p && p.catch) { p.catch(function () {}); }
+            }
         } catch (e) {
             Log.report("直播", "mpegts 抛异常 " + e.message + "，退回 <video> 直接放 m3u8");
             stopFlv();
@@ -153,10 +163,8 @@ var Player = (function () {
         }
     }
 
-    /* 直播间在 "flv" 放法里放（playFlv）。下面这段是没有 FLV 地址时退回 <video> 直接放 m3u8 用的 —— 2026-10-22 电视上第一次放：HEVC 解得出来（1088x1920），但起播后 6 秒里停了 3.5–5.8 秒。怀疑是贴着
-     * 直播最新的那一片起播、手里没有缓冲（每片 ~3.7 秒，下一片还没生成就只能等）。LIVE_BACK：起播时离可跳范围的末端留几秒，0 是不管
-     * （平台自己选的位置）。自测 --live 在同一轮里轮换。元数据那一刻把可跳范围、缓冲、播放头报进「直播」那行。 */
-    var LIVE_BACK = 10;
+    /* 直播间在 "flv" 放法里放（playFlv）。没有 FLV 地址才退回 <video> 直接放 m3u8 —— 电视上 playing 之后要停 5–10 秒才走，可跳范围是空的、
+     * 往回退做不了（2026-10-22 --live，那段实验代码删了）。元数据那一刻把可跳范围、缓冲、播放头报进「直播」那行。 */
     var liveWait = 0, liveStalls = [];
     function fmtRanges(r) {
         var out = [];
@@ -164,12 +172,8 @@ var Player = (function () {
         return out.join(" ") || "空";
     }
     function liveStart() {
-        var sk = el.seekable, info = "可跳 " + fmtRanges(sk) + "，缓冲 " + fmtRanges(el.buffered) + "，播放头 " + el.currentTime.toFixed(1), moved = "";
-        if (LIVE_BACK && sk.length) {
-            var target = Math.max(sk.start(0), sk.end(sk.length - 1) - LIVE_BACK);
-            if (target < el.currentTime - 1) { el.currentTime = target; moved = "，往回退到 " + target.toFixed(1); }
-        }
-        Log.report("直播", "元数据 " + (Date.now() - switchAt) + "ms：" + info + moved + "（LIVE_BACK=" + LIVE_BACK + "）| " + (item ? item.room : ""));
+        Log.report("直播", "元数据（<video>·m3u8）" + (Date.now() - switchAt) + "ms：可跳 " + fmtRanges(el.seekable) + "，缓冲 " + fmtRanges(el.buffered) +
+                   "，播放头 " + el.currentTime.toFixed(1) + " | " + (item ? item.room : ""));
     }
     function wire() {
         el.addEventListener("loadedmetadata", function () {
@@ -228,10 +232,13 @@ var Player = (function () {
     }
 
     function wireRest() {
-        el.addEventListener("ended", function () { if (item && engine === "src" && handlers.ended) { handlers.ended(); } });
+        /* 直播间主播下播：mpegts 读完流、MSE endOfStream，元素 ended —— 和 src 一样交给 app 换下一个。 */
+        el.addEventListener("ended", function () { if (item && (engine === "src" || engine === "flv") && !pendingLive && handlers.ended) { handlers.ended(); } });
         el.addEventListener("error", function () {
-            if (!item) { return; }                       // 拆除时空 src 的回声
+            if (!item || pendingLive) { return; }        // 拆除时空 src 的回声；等着进直播间时是点播管线的事
             if (engine === "mse") { mseFatal("元素报错 " + (el.error ? el.error.code + " " + el.error.message : "?")); return; }
+            /* 直播：元素的 src 是 mpegts 的 blob: 地址，不能走下面「最终地址失败、退回跳转接口」那条（会在 FLV 播放器还挂着时把 m3u8 塞给元素）。 */
+            if (engine === "flv") { failFlv("元素报错 " + (el.error ? el.error.code + " " + el.error.message : "?")); return; }
             var code = el.error ? el.error.code : 0;
             /* 用的是预热拿到的最终地址、而且还没出过画面：可能是签名过期，退回跳转接口一次。 */
             if (!told && !fellBack && el.src.indexOf("/aweme/v1/play/") < 0) {
@@ -323,7 +330,7 @@ var Player = (function () {
     function play(it, note, startAt) {
         if (item && item.live && told) {
             Log.report("直播", "离开 " + item.room + "：看了 " + Math.round((Date.now() - switchAt) / 1000) + " 秒，中途停了 " + liveStalls.length + " 次" +
-                       (liveStalls.length ? "（" + liveStalls.join("/") + "ms）" : "") + "（" + (engine === "flv" ? "mpegts·FLV" : "<video>·m3u8·LIVE_BACK=" + LIVE_BACK) + "）");
+                       (liveStalls.length ? "（" + liveStalls.join("/") + "ms）" : "") + "（" + (engine === "flv" ? "mpegts·FLV" : "<video>·m3u8") + "）");
         }
         liveWait = 0;
         liveStalls = [];
@@ -340,11 +347,13 @@ var Player = (function () {
         srcProgress = 0;
         stuckSince = Date.now();
         clearTimeout(flvTimer);
-        if (it.live && it.flv) {
+        pendingLive = false;
+        if (it.live && it.flv && engine === "mse") {
             try { el.pause(); } catch (e) {}
+            pendingLive = true;
             var g = gen;
             flvTimer = setTimeout(function () { if (g === gen) { playFlv(it); } }, FLV_DELAY);
-        } else if (useMse(it)) { playMse(it, startAt); } else { playSrc(it, startAt); }
+        } else if (it.live && it.flv) { playFlv(it); } else if (useMse(it)) { playMse(it, startAt); } else { playSrc(it, startAt); }
     }
 
     /* 播放头前面还有几秒缓冲（MSE 下只算这一条的槽里、播放头所在的那一段）。 */
@@ -366,6 +375,7 @@ var Player = (function () {
      * 另设上限：切过来 FIRST_CAP 还没出画面就放弃，别让一条永远转圈。 */
     setInterval(function () {
         if (!item || paused) { stuckSince = 0; return; }
+        if (engine === "flv" && flvFailed === gen) { return; }       // 这个直播间已经报过错了（failFlv），别再报一次
         if (el.currentTime !== lastTime) { lastTime = el.currentTime; stuckSince = Date.now(); return; }
         var waiting = !told || ahead() < 2;
         var bytes = !waiting ? -1 : engine === "flv" ? flvTicks : engine === "mse" || useMse(item) ? Mse.fetched(item) : srcProgress;
@@ -387,15 +397,13 @@ var Player = (function () {
             wire();
             wireRest();
             Mse.init(video);
-            Mse.on("ended", function () { if (item && engine === "mse" && handlers.ended) { handlers.ended(); } });
-            Mse.on("error", function (why) { if (item && engine === "mse" && handlers.error) { handlers.error(why); } });
-            Mse.on("fatal", function (why) { if (engine === "mse") { mseFatal(why); } });
+            Mse.on("ended", function () { if (item && engine === "mse" && !pendingLive && handlers.ended) { handlers.ended(); } });
+            Mse.on("error", function (why) { if (item && engine === "mse" && !pendingLive && handlers.error) { handlers.error(why); } });
+            Mse.on("fatal", function (why) { if (engine === "mse" && !pendingLive) { mseFatal(why); } });
         },
         on: function (name, fn) { handlers[name] = fn; },
 
         play: play,
-        /* 自测 --live：轮换起播时离直播末端留几秒。 */
-        setLiveBack: function (n) { LIVE_BACK = n; },
         /* 这一条会不会走 MSE（app 按它选切换动画）。 */
         mseFor: function (it) { return useMse(it); },
         /* 这一条软解好的第一帧（MSE 预热时解的，见 mse.js 的 decodeFirst）：{canvas, ms} 或 {canvas: null, why}。 */
@@ -477,6 +485,8 @@ var Player = (function () {
 
         toggle: function () {
             if (!item) { return paused; }
+            /* 等着进直播间：元素上还是点播那条，el.play() 会把它在封面底下接着放。只记下来，playFlv 照着办。 */
+            if (pendingLive) { paused = !paused; return paused; }
             if (el.paused) { el.play(); paused = false; } else { el.pause(); paused = true; }
             return paused;
         },
@@ -493,6 +503,7 @@ var Player = (function () {
             gen++;
             item = null;
             clearTimeout(flvTimer);
+            pendingLive = false;
             if (engine === "mse" && !release) { try { el.pause(); } catch (e) {} return; }
             if (engine === "mse") { Mse.detach(); }
             stopFlv();                 // 直播不留着：暂停了它也一直在下（去「我」、网格页的时候）
