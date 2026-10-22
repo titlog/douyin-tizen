@@ -189,6 +189,10 @@ var Feed = (function () {
             type: a.aweme_type || 0,
             avatar: first(au.avatar_thumb),
             thumb: first(v.cover),        // 作者主页网格用：url_list[0] 是官方裁好的 3:4 小图（cropcenter:323:430）
+            /* 精选的 16:9 宽卡片用：作者做的横版封面（大字都在这张上，手机上精选的卡片就是它）。2026-10-22 用户：「手机上封面都有很多大字，
+             * 你做的几乎都没有」—— 原来用的 origin_cover 是视频里抽的一帧。没有横版的退到 thumb（作者封面，4:3）。_big 是 1760×990，电视上解一张
+             * 就 7MB，一屏二十张不划算，853×480 那张够清楚。 */
+            card: first(v.universal_cover_horizontal169) || first(v.universal_cover_horizontal169_big) || "",
             top: !!a.is_top,
             time: a.create_time || 0,     // 发布时间（秒）：日志里报视频有多老（老视频走冷存储），--cold 挑一年以前的
             cover: best ? first(best[1]) : "",
@@ -473,6 +477,8 @@ var Feed = (function () {
     return {
         create: create,
         played: played,
+        /* 接口原样的一条作品 → 内部条目（不能放的回 null）。README 截图脚本按视频 id 指定头图时用（spike/desktop-harness/readme-shots.mjs 的 HERO_FROM）。 */
+        fromAweme: function (a) { return normalise(a, []); },
         watchedReport: watchedReport,
         clearCache: function () {
             for (var k in KINDS) { if (KINDS.hasOwnProperty(k)) { try { localStorage.removeItem(cacheKey(k)); } catch (e) {} } }

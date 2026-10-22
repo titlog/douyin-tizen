@@ -277,7 +277,7 @@
                 check("连刷十条", bad === 0, "出画面中位数 " + med + "ms，最慢 " + (slow[slow.length - 1] || -1) + "ms，失败 " + bad + " | 全部=" + slow.join(","));
             });
         }).then(function () {
-            /* 标签顺序：精选 · 直播 · 关注 · 推荐 · 我。预期跟着登录态走：已登录时「关注」能播、「我」是
+            /* 标签顺序：直播 · 精选 · 关注 · 推荐 · 我。预期跟着登录态走：已登录时「关注」能播、「我」是
              * 观看历史那些（焦点在顶上那一排，左键回推荐）；未登录时两个都出二维码。 */
             var recId = st().id, recT = st().t;
             var logged = Account.loggedIn();
@@ -308,17 +308,6 @@
                 }
                 check("未登录时「关注」出二维码", window.__app.tab() === "follow" && window.__app.view() === "login" && ms >= 0, "视图=" + window.__app.view() + "，二维码 " + ms + "ms");
             }).then(function () {
-                key(KEY.LEFT);                       // 到直播（2026-10-22）：<video> 直接放 m3u8（TS，H.265）
-                var before = st().id;
-                return waitShown(before, 25000);
-            }).then(function (ms) {
-                return longestStall(6000).then(function (stall) {
-                    var it = window.__app.current() || {};
-                    check("「直播」能播", window.__app.tab() === "live" && ms >= 0 && stall < 3000 && !!it.live,
-                          "出画面 " + ms + "ms，最长停顿 " + stall + "ms，" + (it.users || "?") + " 人在看，" + st().engine + "，" + st().vw + "x" + st().vh);
-                });
-            }).then(function () { return switchStep("直播里下一个直播间", KEY.DOWN); })
-              .then(function () {
                 key(KEY.LEFT);                       // 到精选：三列网格，挑着看（2026-10-22）
                 return waitFor(function () { var g = Grid.state(); return g && g.kind === "jingxuan" && g.cards > 0 && g.imgs >= Math.min(g.cards, 3); }, 20000);
             }).then(function (ms) {
@@ -340,7 +329,20 @@
             }).then(function () {
                 var g = Grid.state() || {};
                 check("返回键回到精选网格、焦点跟着刚才那条", window.__app.view() === "grid" && g.sel === 2, "视图=" + window.__app.view() + "，焦点 #" + g.sel);
-                key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT);      // 最右边那一列再右：到直播，再右：关注，再右：回到推荐
+                /* 直播在精选左边（2026-10-22）：第三张往左两下到最左边那一列，再左就是直播。<video> 不直接放 m3u8，走 mpegts.js 放 FLV（H.265）。 */
+                var before = st().id;
+                key(KEY.LEFT); key(KEY.LEFT); key(KEY.LEFT);
+                return waitShown(before, 25000);
+            }).then(function (ms) {
+                return longestStall(6000).then(function (stall) {
+                    var it = window.__app.current() || {};
+                    check("「直播」能播", window.__app.tab() === "live" && ms >= 0 && stall < 3000 && !!it.live,
+                          "出画面 " + ms + "ms，最长停顿 " + stall + "ms，" + (it.users || "?") + " 人在看，" + st().engine + "，" + st().vw + "x" + st().vh);
+                });
+            }).then(function () { return switchStep("直播里下一个直播间", KEY.DOWN); })
+              .then(function () {
+                /* 直播 → 右 精选（焦点在第一张）→ 右右到最右边那一列 → 右 关注 → 右 推荐。 */
+                key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT); key(KEY.RIGHT);
                 return waitShown("", 15000);
             }).then(function () {
                 return wait(2500).then(function () {

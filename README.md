@@ -18,6 +18,8 @@
 | 暂停后按下键选中右边那一列：头像 · 评论（带合集的视频还有左下的「合集」） | 评论侧栏：上下键翻，确认键展开回复 |
 | ![合集选集](docs/screenshots/04-mix.jpg) | ![作者主页](docs/screenshots/03-author.jpg) |
 | 合集选集：焦点在正在看的那一集，接着放、下键下一集 | 作者主页：资料和作品网格，往下翻自动加载 |
+| ![精选](docs/screenshots/07-jingxuan.jpg) | ![直播](docs/screenshots/08-live.jpg) |
+| 精选：三列网格挑着看，封面是作者做的那张 | 直播：上下键换直播间 |
 
 ![「我」](docs/screenshots/06-me.jpg)
 
@@ -28,7 +30,7 @@
 
 ## 能做的
 
-- **精选 / 直播 / 关注 / 推荐 / 我** 五个标签。关注、推荐上下键刷，播完自动下一条；每个标签各记各的位置。
+- **直播 / 精选 / 关注 / 推荐 / 我** 五个标签。关注、推荐上下键刷，播完自动下一条；每个标签各记各的位置。
 - **精选**：三列网格挑着看，看的时候上下键接着刷，返回键回到网格。
 - **直播**：上下键换直播间，进一个直播间 1 秒多出画面。
 - **扫码登录**：官网的登录页在隐藏框里打开，二维码搬到电视上放大。
@@ -140,7 +142,7 @@ MIT。`app/js/vendor/mp4box.js` 是 BSD-3-Clause，见 [`mp4box.LICENSE`](app/js
 A Douyin (TikTok China) client for Samsung Tizen TVs, driven by the remote. The TV talks to Douyin directly —
 no backend, no proxy, no server; the login stays on the set.
 
-- Five tabs (featured / live / following / recommended / me). Following and recommended: up and down to browse, autoplay next.
+- Five tabs (live / featured / following / recommended / me). Following and recommended: up and down to browse, autoplay next.
 - Featured is a three-column grid to pick from; while watching, up and down keep browsing, Back returns to the grid.
 - Live: up and down to change rooms; a room shows picture in a little over a second.
 - QR sign-in: the official login page runs in a hidden frame and its QR code is shown full size on the TV.

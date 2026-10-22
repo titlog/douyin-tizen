@@ -1,9 +1,10 @@
 /* 界面与遥控器。
  *
- * 顶部五个标签：精选 · 直播 · 关注 · 推荐 · 我（默认进推荐）（像抖音 App 横滑切标签）。直播、关注、推荐是上下刷的流，每个标签
+ * 顶部五个标签：直播 · 精选 · 关注 · 推荐 · 我（默认进推荐）（像抖音 App 横滑切标签）。直播、关注、推荐是上下刷的流，每个标签
  * 各记各的位置，切回来接着看；精选是 16:9 三列的网格，挑一条看（2026-10-22 用户要求，像手机上的精选），放的时候上下键接着刷，
  * 返回键回到网格；「我」登录了是观看历史 · 喜欢 · 收藏的网格（js/grid.js），没登录是扫码登录。
- * 未登录时「关注」也显示扫码登录。精选的网格最右边那一列再按右键到「直播」（标签栏不能选，这是离开精选的路）。
+ * 未登录时「关注」也显示扫码登录。精选的网格最左边那一列再按左键到「直播」、最右边那一列再按右键到「关注」（标签栏不能选，这是
+ * 离开精选的路）。直播放在精选左边（2026-10-22 用户要求）。
  * 直播（2026-10-22 用户要求）：上下键换直播间，暂停超过 20 秒再继续就从现在的画面重新开（直播窗口只有几秒，照 bilibili-tizen），
  * 不能快进快退；右边那一列只有主播头像（红圈、「直播」），能进主播的主页；直播间的弹幕 / 评论没接。
  *
@@ -28,8 +29,8 @@
     };
 
     var TABS = [
-        {key: "jingxuan", name: "精选", feed: false, grid: true},
         {key: "live", name: "直播", feed: true},
+        {key: "jingxuan", name: "精选", feed: false, grid: true},
         {key: "follow", name: "关注", feed: true, needLogin: true},
         {key: "recommend", name: "推荐", feed: true},
         {key: "me", name: "我", feed: false}
@@ -934,7 +935,7 @@
             return;
         }
         if (view === "grid") {
-            if (k === KEY.LEFT) { if (Grid.move(-1, 0) === "left") { moveTab(-1); } }      // 只有「我」回 "left"
+            if (k === KEY.LEFT) { if (Grid.move(-1, 0) === "left") { moveTab(-1); } }      // 「我」顶上那一排、精选最左边那一列回 "left"
             else if (k === KEY.RIGHT) { if (Grid.move(1, 0) === "right") { moveTab(1); } }        // 只有精选回 "right"
             else if (k === KEY.UP) { Grid.move(0, -1); }
             else if (k === KEY.DOWN) { Grid.move(0, 1); }
@@ -1104,6 +1105,8 @@
         enableActs: function () { actTest = true; },
         pos: function () { return feed() ? feed().position() : -1; },
         current: current,
+        /* README 截图脚本：拿到正在放的视频流，往它后面插一条指定的视频。 */
+        feedNow: function () { return feed(); },
         /* 自测 --ab 用：轮换切换方式、读每次切换的计时。 */
         setPush: function (m) { PUSH_MODE = m; },
         setCoverSeek: function (ms) { COVER_SEEK_MS = ms; },

@@ -173,9 +173,10 @@ var Grid = (function () {
             c.style.left = (g.left + (i % g.cols) * (g.cw + g.gap)) + "px";
             c.style.top = (me.top + Math.floor(i / g.cols) * row(g)) + "px";
             if (g.wide) {
-                /* 宽卡片用和视频同比例的那张封面（精选多是横屏，origin_cover 是 16:9）；thumb 是官方裁好的 3:4 小图，放不进 16:9。 */
+                /* 宽卡片用作者做的封面（大字都在上面）：横版 16:9 的（card）优先，没有就用 thumb（作者封面；精选接口给的是 4:3，裁掉上下一点），
+                 * 再没有才用 cover（视频里抽的一帧，没有字 —— 第一版就是用的它，用户问「手机上封面都有大字，你的怎么没有」）。 */
                 c.innerHTML = "<div class=\"th\"><img><span class=\"dur\"></span></div><div class=\"tt\"></div><div class=\"by\"></div>";
-                c.firstChild.firstChild.src = it.cover || it.thumb;
+                c.firstChild.firstChild.src = it.card || it.thumb || it.cover;
                 c.firstChild.lastChild.textContent = it.dur ? clock(it.dur) : "";
                 c.childNodes[1].textContent = it.desc;
                 c.childNodes[2].textContent = [it.author ? "@" + it.author : "", "♥ " + count(it.likes), ago(it.time)].filter(function (x) { return x; }).join(" · ");
@@ -286,13 +287,14 @@ var Grid = (function () {
         if (f && !f.all().length) { more(); }
     }
 
-    /* 回 "left"：「我」顶上那一排最左边再往左 —— app.js 切到左边的标签。回 "right"：精选最右边那一列再往右（精选没有顶上那一排，
-     * 标签栏也不能选，这是离开它的路）。 */
+    /* 回 "left"：「我」顶上那一排最左边再往左、精选最左边那一列再往左 —— app.js 切到左边的标签。回 "right"：精选最右边那一列再往右
+     * （精选没有顶上那一排，标签栏也不能选，这是离开它的路）。 */
     function move(dx, dy) {
         var me = cur;
         if (!me) { return ""; }
         var cols = me.geo.cols;
         if (me.kind === "jingxuan" && dx > 0 && (!me.cards.length || me.sel % cols === cols - 1 || me.sel + 1 >= me.cards.length)) { return "right"; }
+        if (me.kind === "jingxuan" && dx < 0 && (!me.cards.length || me.sel % cols === 0)) { return "left"; }
         if (me.zone === "tabs") {
             if (dy > 0) { if (me.cards.length) { me.zone = "grid"; measure(focus(true)); } return ""; }
             if (dy < 0) { return ""; }

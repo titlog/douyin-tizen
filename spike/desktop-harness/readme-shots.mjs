@@ -64,9 +64,9 @@ await ctx.addInitScript(() => {
 const sleep = t => new Promise(r => setTimeout(r, t));
 const ev = (fn, arg) => page.evaluate(fn, arg);
 const key = async k => { await ev(c => { const e = document.createEvent('Event'); e.initEvent('keydown', true, true); e.keyCode = c; document.dispatchEvent(e); }, k); await sleep(250); };
-async function waitFor(fn, ms, what) {
+async function waitFor(fn, ms, what, arg) {
   const end = Date.now() + ms;
-  while (Date.now() < end) { if (await ev(fn).catch(() => false)) return true; await sleep(300); }
+  while (Date.now() < end) { if (await ev(fn, arg).catch(() => false)) return true; await sleep(300); }
   throw new Error('等不到：' + what + ' | 视图=' + await ev(() => window.__app.view() + ' 页=' + window.__app.page() + ' 播放器=' + JSON.stringify(Player.state())));
 }
 /* 出画面：封面撤了、转圈没了、播放头走起来了。 */
@@ -180,7 +180,31 @@ if (MIX_FROM) {
 
 /* 头图用第二条：后面暂停、评论、作者主页截的都是它，几张图讲的是同一位作者（2026-10-22 那次开机第一条是一位博主的自拍
  * 大特写，后面再没出现，不适合当头图）。一出画面就截：左下的作者、标题和右边那一列 5 秒后淡出。 */
-await key(40); await shown();
+/* 下一条：按下键之后等 id 真的换了再等出画面（按完键的那一刻旧的那条还「出着画面」，shown() 当场就满足）。 */
+async function nextOne() {
+  const id0 = await ev(() => window.__app.current() && window.__app.current().id);
+  await key(40);
+  await waitFor(id => window.__app.current() && window.__app.current().id !== id, 20000, '换下一条', id0).catch(() => {});
+  await shown();
+}
+/* HERO_FROM=<视频 id>：头图（以及后面暂停、评论、作者主页）就用这一条 —— 插到推荐的下一条再按下键过去。推荐流每次开新浏览器都不一样，
+ * 2026-10-22 一天里头图位置轮到过自拍大特写、海滩比基尼、只有 7–10 秒的（等着暂停时就放完了）；README 那一组用的是 7690892518036098350。 */
+if (process.env.HERO_FROM) {
+  const ok = await ev(async id => {
+    await Bridge.ready();
+    const j = await Bridge.get('/aweme/v1/web/aweme/detail/', {aweme_id: id});
+    const it = j && j.aweme_detail && Feed.fromAweme(j.aweme_detail);
+    if (!it) return 'aweme/detail 没回能放的：' + JSON.stringify(j).slice(0, 120);
+    const f = window.__app.feedNow();
+    f.all().splice(f.position() + 1, 0, it);
+    return 'ok @' + it.author + ' ' + Math.round(it.dur / 1000) + 's';
+  }, process.env.HERO_FROM);
+  log('HERO_FROM ' + ok);
+}
+await nextOne();
+/* HERO_SKIP=作者名,作者名：头图那条跳过这些作者（2026-10-22：同一位博主的自拍大特写两次排到这个位置）。 */
+const HERO_SKIP = (process.env.HERO_SKIP || '').split(',').filter(Boolean);
+for (let i = 0; i < 10 && HERO_SKIP.includes(await ev(() => window.__app.current().author)); i++) { log('头图跳过 @' + await ev(() => window.__app.current().author)); await nextOne(); }
 await sleep(300);
 await shot('01-feed');
 await sleep(8000);                           // 片头那几秒是一片白光，放一会儿再暂停
@@ -207,6 +231,49 @@ await waitFor(() => { const g = Grid.state(); return g && g.kind === 'author' &&
 await sleep(1500);
 await shot('03-author');
 await key(10009); await shown(); await sleep(1000);
+
+/* 精选（三列网格）和直播（2026-10-22 加的两个标签）。标签顺序 直播 · 精选 · 关注 · 推荐 · 我：推荐 → 左 关注（没登录是二维码）→ 左 精选
+ * → 最左边那一列再左 直播。直播挑横屏的直播间（多是游戏、体育），不拿对着镜头的真人当 README 的图。 */
+if (!ONLY.length || ONLY.includes('07-jingxuan') || ONLY.includes('08-live')) {
+  await key(37); await sleep(800); await key(37);
+  await waitFor(() => { const g = Grid.state(); return g && g.kind === 'jingxuan' && g.cards >= 6 && g.imgs >= 6; }, 30000, '精选');
+  /* JX_SEL=n：焦点挪到第 n 张（一行三张：往下 n/3 行、往右 n%3 张）再截（2026-10-22 第一张的封面是全黑的，焦点框里空一块）。
+   * 截完原路回到第一行最左边，再左就是直播。 */
+  const jxSel = +process.env.JX_SEL || 0, downs = Math.floor(jxSel / 3), rights = jxSel % 3;
+  for (let i = 0; i < downs; i++) { await key(40); await sleep(300); }
+  for (let i = 0; i < rights; i++) await key(39);
+  await sleep(1500);
+  await shot('07-jingxuan');
+  for (let i = 0; i < downs; i++) { await key(38); await sleep(300); }
+  for (let i = 0; i < rights + 1; i++) await key(37);
+  await shown();
+  /* LIVE_PICK=<目录>：横屏、不是新闻台的直播间挨个截一张候选（live-<k>.jpg，日志里写是谁），看过挑一张拷成 08-live.jpg。截完就退出。 */
+  if (process.env.LIVE_PICK) {
+    fs.mkdirSync(process.env.LIVE_PICK, {recursive: true});
+    const seenRoom = new Set();
+    for (let i = 0, k = 0; i < 40 && k < 10; i++) {
+      const it = await ev(() => { const x = window.__app.current(); return x ? {room: x.room, author: x.author, desc: x.desc, w: x.w, h: x.h} : null; });
+      /* 横屏的直播间太少（2026-10-22：40 个里 1 个），候选里竖屏的也要；LIVE_ANY=1 时不管横竖。 */
+      if (it && !seenRoom.has(it.room) && (process.env.LIVE_ANY || it.w > it.h) && !/央视|CCTV|新闻|卫视|人民|新华|政务/.test(it.author + it.desc)) {
+        seenRoom.add(it.room);
+        await sleep(1500);
+        await shot('live-' + (++k), process.env.LIVE_PICK);
+        log('候选 live-' + k + '：@' + it.author + ' · ' + it.desc);
+      }
+      await key(40); await sleep(500); await shown();
+    }
+    await browser.close(); process.exit(0);
+  }
+  /* 新闻、官方台的直播（2026-10-22 第一次挑到的是央视转播会议）也跳过。 */
+  const okLive = () => ev(() => { const it = window.__app.current(); return !!it && it.live && it.w > it.h && !/央视|CCTV|新闻|卫视|人民|新华|政务/.test(it.author + it.desc); });
+  for (let i = 0; i < 25 && !(await okLive()); i++) { await key(40); await sleep(500); await shown(); }
+  log('直播间：' + await ev(() => { const it = window.__app.current(); return it.author + ' ' + it.w + 'x' + it.h; }));
+  await sleep(1500);
+  await shot('08-live');
+  await key(39); await sleep(800); await key(39); await key(39); await key(39); await sleep(800); await key(39);   // 直播 → 精选（右右到最右边那一列）→ 关注 → 推荐
+  await shown(); await sleep(1000);
+  if (ONLY.length && !ONLY.includes('04-mix') && !ONLY.includes('06-me')) { await browser.close(); process.exit(0); }
+}
 
 if (PICK) {
   fs.mkdirSync(PICK, {recursive: true});
