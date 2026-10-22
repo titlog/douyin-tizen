@@ -56,8 +56,8 @@ const HOST = [
   "DataView", "Promise", "Blob", "Function", "fetch", "performance",
   "requestAnimationFrame", "PerformanceObserver", "TextEncoder", "TextDecoder",
   "tizen", "webapis",
-  // WebCodecs：msespike.js 的 --splice 探测用，用之前先 typeof 判断（这台电视有没有还要量）
-  "VideoDecoder", "EncodedVideoChunk",
+  // WebCodecs：mse.js 软解第一帧、msespike.js 的 --splice 探测用，用之前都先 typeof 判断（这台电视有，2026-10-22 量过）
+  "VideoDecoder", "EncodedVideoChunk", "createImageBitmap",
 ];
 
 let failed = false;

@@ -19,6 +19,8 @@ video {
 #cover { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; display: none; }
 #cover.show { display: block; }
 #cover .img { position: absolute; background: center / cover no-repeat; will-change: transform; }
+/* 软解出来的第一帧（mse.js 的 decodeFirst，已经是画面大小）铺满 .img 那块。 */
+#cover .img .frame { display: block; width: 100%; height: 100%; }
 /* "early" 切换：整层（黑底 + 封面）一起滑进来，滑到位就盖住旧视频停住的最后一帧。 */
 #cover.solid { background: #000; }
 

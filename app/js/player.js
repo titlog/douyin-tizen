@@ -398,6 +398,8 @@ var Player = (function () {
         setLiveBack: function (n) { LIVE_BACK = n; },
         /* 这一条会不会走 MSE（app 按它选切换动画）。 */
         mseFor: function (it) { return useMse(it); },
+        /* 这一条软解好的第一帧（MSE 预热时解的，见 mse.js 的 decodeFirst）：{canvas, ms} 或 {canvas: null, why}。 */
+        frameOf: function (it) { return useMse(it) ? Mse.frameOf(it) : {canvas: null, why: "不走 MSE"}; },
 
         /* 预热下一条。不创建任何媒体元素（第二个媒体元素会抢走唯一的解码器，见文件顶部）。
          *   "range"：走 302 拿最终地址 + 取开头 WARM_BYTES —— 焐热 CDN 边缘、省掉起播那一跳。

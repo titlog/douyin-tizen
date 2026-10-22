@@ -45,6 +45,26 @@ var Mse = (function () {
     var ops = [], lastT = -1, stallFrom = 0, stallTold = false, showAt = 0;   // 停顿诊断：最近 3 秒的队列操作
     var handlers = {};
 
+    /* 第一帧（2026-10-22，用户：「下滑先出现一个画面，再突然开始播放」）。切换时盖着的封面是 origin_cover，不一定是第一帧，撤封面那一下
+     * 画面会跳。预热时把这条的第一个关键帧留下来，备好之后用 WebCodecs **软件**解出来、缩到画面大小画进一张 canvas，切过去时当封面 ——
+     * seek 到槽起点后硬件出的第一帧就是它。--splice 在电视上量过：prefer-software 解一帧 76ms，正在放的那条一点不受影响；no-preference /
+     * prefer-hardware 抢了唯一的解码器，正在放的那条停了 100–272ms。所以只许软件解，在预热时做（画进 canvas 也要上百毫秒）。
+     * 最多留 FRAMES 张（1080p 一张 8MB）。 */
+    var FRAMES = 3, framed = [];
+    var CAN_FRAME = typeof VideoDecoder !== "undefined" && typeof EncodedVideoChunk !== "undefined" && typeof createImageBitmap !== "undefined";
+    /* seek 之后先别续取（不在主线程上转封装 2MB），撤封面那几百毫秒里主线程要空着：39 次切换里 4 次撤封面晚了 120–180ms，那一刻
+     * 主线程在忙，20ms 一次的计时器被顶住，视频在封面下已经走了 0.15 秒，一撤就是一跳。槽里前方缓冲够这么多秒才这么做。 */
+    var HOLD_MS = 1000, HOLD_IF_AHEAD = 3;
+    /* 预热别的条目也一样（2026-10-22 --abseek：30 次切换里 4 次撤封面晚了 120–330ms，每次同一秒里都有一条「备好 … 转封装 220–470ms」——
+     * 预热的下一两条的数据正好在切换那一刻回来，mp4box 在主线程上转封装）。切换开始后 QUIET_MS 内回来的预热数据先放着，过了再转；
+     * 软解第一帧也等。正在切过去的那一条（现取）不等。 */
+    var QUIET_MS = 1000, quietUntil = 0;
+    function whenQuiet(e) {
+        return new Promise(function (ok) {
+            (function w() { var left = quietUntil - Date.now(); if (left <= 0 || e.urgent) { ok(); } else { setTimeout(w, Math.min(left + 5, 50)); } })();
+        });
+    }
+
     var CONTENT_RANGE = new RegExp("bytes (\\d+)-(\\d+)/(\\d+)");
 
     function R(msg) { Log.report("mse", msg); }
@@ -339,6 +359,63 @@ var Mse = (function () {
         }
         if (items[e.id] === e) { delete items[e.id]; }
         e.mp4 = null;
+        e.frame = null;
+        e.key0 = null;
+    }
+
+    /* avcC 盒子（mp4box 解析出来的）→ WebCodecs 的 description，原样的 AVCDecoderConfigurationRecord。 */
+    function avcCBytes(a) {
+        var out = [1, a.AVCProfileIndication, a.profile_compatibility, a.AVCLevelIndication, 0xFC | a.lengthSizeMinusOne, 0xE0 | a.SPS.length];
+        var put = function (ps) { out.push(ps.length >> 8, ps.length & 255); for (var i = 0; i < ps.nalu.length; i++) { out.push(ps.nalu[i]); } };
+        a.SPS.forEach(put);
+        out.push(a.PPS.length);
+        a.PPS.forEach(put);
+        if (a.ext) { for (var i = 0; i < a.ext.length; i++) { out.push(a.ext[i]); } }
+        return new Uint8Array(out);
+    }
+    function fit(w, h) {
+        var sc = Math.min(1920 / w, 1080 / h);
+        return {w: Math.round(w * sc), h: Math.round(h * sc)};
+    }
+    /* 软件解第一帧 → 缩到画面大小 → canvas。失败了就没有，切换时照旧用封面图。 */
+    function decodeFirst(e) {
+        if (!CAN_FRAME || !e.key0 || !e.desc || e.frame || e.framing || e.dead) { return; }
+        e.framing = true;
+        var t0 = Date.now(), box = fit(e.vw, e.vh), done = false, dec = null;
+        var finish = function (why) {
+            if (done) { return; }
+            done = true;
+            e.framing = false;
+            e.key0 = null;
+            try { dec.close(); } catch (x) {}
+            if (why) { e.frameErr = why; R("第一帧没解出来（" + why + "）| " + Diag.priv(e.item.desc.slice(0, 12))); }
+        };
+        try {
+            dec = new VideoDecoder({
+                output: function (fr) {
+                    var t1 = Date.now();
+                    createImageBitmap(fr, {resizeWidth: box.w, resizeHeight: box.h, resizeQuality: "medium"}).then(function (bmp) {
+                        fr.close();
+                        if (e.dead) { bmp.close(); return; }
+                        var c = document.createElement("canvas");
+                        c.width = box.w;
+                        c.height = box.h;
+                        c.getContext("2d").drawImage(bmp, 0, 0);
+                        bmp.close();
+                        e.frame = c;
+                        e.frameMs = (t1 - t0) + "+" + (Date.now() - t1);
+                        framed.push(e);
+                        while (framed.length > FRAMES) { var old = framed.shift(); if (old !== cur) { old.frame = null; } else { framed.push(old); break; } }
+                        finish("");
+                    }, function (err) { fr.close(); finish("画不出来：" + err.message); });
+                },
+                error: function (err) { finish(err.message); }
+            });
+            dec.configure({codec: e.vcodec, description: e.desc, codedWidth: e.vw, codedHeight: e.vh, hardwareAcceleration: "prefer-software"});
+            dec.decode(new EncodedVideoChunk({type: "key", timestamp: 0, data: e.key0}));
+            dec.flush().catch(function (err) { finish("flush：" + err.message); });
+            setTimeout(function () { finish(e.frame ? "" : "3 秒没出帧"); }, 3000);
+        } catch (err) { finish("抛 " + err.message); }
     }
 
     function onInfo(e, info) {
@@ -349,6 +426,8 @@ var Mse = (function () {
             throw unusable("编码 " + v.codec + " / " + a.codec + " 和 SourceBuffer 的 " + fam.video + " / " + fam.audio + " 不是一族");
         }
         e.codec = v.codec + " / " + a.codec + " " + (a.audio ? a.audio.sample_rate + "Hz" : "");
+        e.vcodec = v.codec;
+        try { var cc = e.mp4.getTrackById(v.id).mdia.minf.stbl.stsd.entries[0].avcC; e.desc = cc ? avcCBytes(cc) : null; } catch (x) { e.desc = null; }
         e.vw = v.video ? v.video.width : v.track_width;
         e.vh = v.video ? v.video.height : v.track_height;
         e.dur = info.duration / info.timescale;
@@ -378,6 +457,9 @@ var Mse = (function () {
             for (var i = from; i < sampleNum && !sync; i++) { sync = !!smp[i].is_sync; }
             e.segFrom[id] = sampleNum;
             enqueue(kind, {e: e, buf: buf, gen: e.gen, sync0: !!(smp[from] && smp[from].is_sync), sync: sync});
+            if (CAN_FRAME && kind === "video" && from === 0 && !e.key0 && !e.frame) {
+                try { var s0 = f.getSample(f.getTrackById(id), 0); if (s0 && s0.data && s0.is_sync) { e.key0 = new Uint8Array(s0.data); } } catch (x) {}
+            }
             try { f.releaseUsedSamples(id, sampleNum); } catch (x) {}
         };
     }
@@ -398,7 +480,7 @@ var Mse = (function () {
     function prepare(item, now) {
         var e = items[item.id];
         if (e) { e.usedAt = ++clock; return e.ready; }
-        e = items[item.id] = {id: item.id, item: item, slot: -1, base: 0, pending: 0, waiters: [], gen: 0, usedAt: ++clock,
+        e = items[item.id] = {id: item.id, item: item, slot: -1, base: 0, pending: 0, waiters: [], gen: 0, usedAt: ++clock, urgent: !!now,
                               next: 0, size: 0, done: false, dead: false, xhr: null, t0: Date.now(), now: !!now,
                               segFrom: {}, gop: {video: [], audio: []}, replay: {video: null, audio: null}, replays: 0, replayBytes: 0};
         var head = now ? HEAD_NOW : HEAD;
@@ -414,17 +496,23 @@ var Mse = (function () {
             if (m === null) { throw unusable("moov 不在开头"); }
             if (!m) { throw unusable("开头 1MB 里读不到 moov 头"); }
             e.moov = m.end - m.start;
-            makeFile(e);
-            var t1 = Date.now();
-            feed(e, r.buf, 0);
-            e.remuxMs = Date.now() - t1;
-            var want = Math.min(e.size, m.end + head);
-            if (want <= e.next) { return; }
-            return get(e, e.url, e.next, want - 1).then(function (r2) {
+            return whenQuiet(e).then(function () {
                 if (e.dead) { return; }
-                var t2 = Date.now();
-                feed(e, r2.buf, e.next);
-                e.remuxMs += Date.now() - t2;
+                makeFile(e);
+                var t1 = Date.now();
+                feed(e, r.buf, 0);
+                e.remuxMs = Date.now() - t1;
+                var want = Math.min(e.size, m.end + head);
+                if (want <= e.next) { return; }
+                return get(e, e.url, e.next, want - 1).then(function (r2) {
+                    if (e.dead) { return; }
+                    return whenQuiet(e).then(function () {
+                        if (e.dead) { return; }
+                        var t2 = Date.now();
+                        feed(e, r2.buf, e.next);
+                        e.remuxMs += Date.now() - t2;
+                    });
+                });
             });
         }).then(function () {
             if (e.dead) { throw new Error("等的时候被挤出了槽"); }
@@ -437,6 +525,7 @@ var Mse = (function () {
               (e.firstGet ? "，第一段 首字节 " + e.firstGet.ttfb + "ms 共 " + e.firstGet.ms + "ms " + e.firstGet.host : "") +
               " | " + gopStat(keysOf(e)) + " | 槽里 " + slotRanges(e) +
               (e.replays ? "，重放 " + e.replays + " 次 " + mb(e.replayBytes) : "") + " | " + Diag.priv(item.desc.slice(0, 12)));
+            if (!e.now) { whenQuiet(e).then(function () { decodeFirst(e); }); }
             return e;
         });
         e.ready.catch(function (err) {
@@ -466,7 +555,7 @@ var Mse = (function () {
     /* 正在放的那条：缓冲领先不到 AHEAD 秒就往后续取。 */
     function pumpNet() {
         var e = cur;
-        if (!e || e.dead || e.done || e.xhr || !e.info || e.gaveUp || Date.now() < (e.retryAt || 0)) { return; }
+        if (!e || e.dead || e.done || e.xhr || !e.info || e.gaveUp || Date.now() < (e.retryAt || 0) || Date.now() < (e.holdNet || 0)) { return; }
         var r = rangeAt(el.currentTime);
         if (r && r.end - el.currentTime > AHEAD) { return; }
         if (q.video.length > 30) { return; }
@@ -642,10 +731,19 @@ var Mse = (function () {
             return e.info && !e.pending && e.prepMs ? "槽里有（" + Math.round((Date.now() - e.t0) / 1000) + " 秒前开始备，用了 " + e.prepMs + "ms）" : "在途";
         },
         prepare: function (item) { return prepare(item, false); },
+        /* 这一条软解好的第一帧（canvas，已经是画面大小），没有就 null。fail：为什么没有（日志用）。 */
+        frameOf: function (item) {
+            var e = items[item.id];
+            return e && e.frame ? {canvas: e.frame, ms: e.frameMs} : {canvas: null, why: !CAN_FRAME ? "没有 WebCodecs" : !e ? "没预热" : e.frameErr || (e.framing ? "还在解" : "没解")};
+        },
+        /* 自测 --ab：撤封面前先别续取的闸。 */
+        setHold: function (ms) { HOLD_MS = ms; },
 
         /* 放这一条：备好（没预热过就现取）→ seek 到它的槽。返回 {e, target}；被后来的 show 顶掉返回 null。 */
         show: function (item, startAt) {
             var g = ++showGen, prev = cur;
+            quietUntil = Date.now() + QUIET_MS;
+            if (items[item.id]) { items[item.id].urgent = true; }      // 切过去的这一条要是还在预热，它不等安静（不然被自己引起的这一秒耽误）
             endedSent = false;
             var e0 = items[item.id];
             if (!(e0 && e0.info && !e0.pending)) { try { el.pause(); } catch (x) {} }
@@ -678,6 +776,8 @@ var Mse = (function () {
                 el.currentTime = target;
                 var p = el.play();
                 if (p && p.catch) { p.catch(function () {}); }
+                var ra = rangeAt(target);
+                e.holdNet = HOLD_MS && ra && ra.end - target >= HOLD_IF_AHEAD ? Date.now() + HOLD_MS : 0;
                 pumpNet();
                 return {e: e, target: target};
             });
@@ -703,6 +803,7 @@ var Mse = (function () {
             }
             var target = e.base + t;
             if (!rangeAt(target)) { resync(e, target - e.base); }
+            e.holdNet = 0;
             endedSent = false;
             el.currentTime = target;
             pumpNet();

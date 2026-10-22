@@ -161,6 +161,7 @@ zsh tools/deploy.sh                      # 终端 2；--spike 装可行性探测
 zsh tools/deploy.sh --selftest           # 自己派发按键把「刷」走一遍，逐步上报 PASS/FAIL（30 步，约 5 分钟）
 zsh tools/deploy.sh --livemse            # 直播：mpegts.js 放 FLV，每个直播间开始到动起来、之后 15 秒卡不卡（约 3 分钟）
 zsh tools/deploy.sh --splice             # 切换能不能不 seek：WebCodecs 软解第一帧、剪接、对照 seek（探测，见「上下滑还能多快」）
+zsh tools/deploy.sh --abseek             # 切换时 seek 在动画第 200 / 130ms 发，逐条轮换连刷 30 条，顺带看软解第一帧用上几次（约 4 分钟）
 zsh tools/deploy.sh --author             # 只走作者主页那 7 步，1 分钟
 zsh tools/deploy.sh --grid               # 作者主页网格上下翻，同一轮轮换三种做法比掉帧，2 分钟
 zsh tools/deploy.sh --soak               # 连刷 20 分钟 + 登录页挂 6 分钟，看风控和二维码轮换
@@ -745,8 +746,18 @@ Playwright 的 Chrome 关掉跨域检查，按 `STEPS` 派发按键、截图；`
 | **剪接**：不 seek，在播放头之后 δ 秒处 `remove` 掉当前这条、把下一条 append 在那里，解码器不停 | **不行**：只要删播放头前面的缓冲，播放就整个冻住（readyState→1，6 秒不恢复，δ 从 1.5 到 0.25 秒 10 次全是），之后 seek 也救不回来。桌面 Chrome 上 10 次全顺 —— 电视的硬件管线早把前面的数据读进去了 |
 | **封面换成真第一帧**：WebCodecs 解出下一条的第一个关键帧，画进 canvas 当封面（和 seek 之后硬件出的第一帧一模一样，撤封面就不会跳） | **可以，但只能软件解**：`prefer-software` 出帧 76ms、正在放的那条播放头一动不动；`no-preference` / `prefer-hardware` 抢了唯一的解码器，正在放的那条停了 100–272ms、readyState 掉到 1。画进 canvas 又 ~150ms（576×1024），得在预热时做，不能在按键那一刻 |
 
-**还没做**：封面换成软解的第一帧、seek 提前（现在等动画走到 200ms）、切换后那半秒不做 mp4box 续取（`pumpNet` 在 seek 之后立刻取 2MB
-再在主线程上转封装）。三样都要同一轮 A/B 量、再让用户看。
+做了的三样（`zsh tools/deploy.sh --abseek`：同一轮连刷 30 条，seek 时刻 200 / 130ms 逐条轮换）：
+
+- **封面换成软解的第一帧**（mse.js 的 `decodeFirst`）：转封装时把第 0 个样本（关键帧）抄下来，备好之后 `VideoDecoder`（只许
+  prefer-software）解、`createImageBitmap` 缩到画面大小、画进 canvas，最多留 3 张。切过去从头放时 `#cover .img` 里贴这张 canvas
+  （从中间接着放的不用）。电视上解一帧 82–99ms + 缩放画布 11–21ms，30 次切换 30 次用上。「封面」那行报「软解第一帧（解+画 ms）」或
+  「封面图（为什么没有）」。
+- **seek 提前到 130ms**（`COVER_SEEK_MS`）：两轮按键→画面动起来中位 453 / 507ms、462 / 574ms（130 / 200）。
+- **切换那一秒主线程让出来**：seek 之后 1 秒内不续取（`HOLD_MS`，前方缓冲 ≥3 秒时），预热回来的数据先不转封装、软解第一帧也等（`QUIET_MS`，
+  正在切过去的那条标 `urgent` 不等）。只做前一半时撤封面晚 >100ms 还是 4/30 —— 每次同一秒里都有一条「备好 … 转封装 220–470ms」：预热的
+  下一两条正好在切换那一刻回来；两半都做之后 **0/30**。
+- 合起来：按键→画面动起来中位 ~490 → ~450ms，撤封面不再跳（同一帧）、不再偶发晚。**还要用户看**：seek 提前后顶上 ~5% 那一条旧画面冻住 /
+  变黑 ~120ms 看不看得出来；软解的第一帧和硬件画出来的第一帧颜色亮度有没有差（电视对视频层有画质处理，对网页层没有）。
 
 ## 诊断日志（2026-10-21，用户要求，照搬 bilibili）
 

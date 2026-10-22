@@ -1137,7 +1137,37 @@
         }, function (e) { Log.report("LIVE", "中止：" + e.message); });
     }
 
-    var MODES = {live: liveRun, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
+    /* --abseek（2026-10-22）：切换时什么时候 seek。cover 动画（整页 250ms 盖上来）走到第几毫秒发 seek：200（原来，盖到 ~99.5%）/ 130
+     * （~95%，顶上一条旧画面会冻住 / 变黑 ~120ms，要人眼看）逐条轮换。同时看：撤封面晚没晚（>100ms 算晚，主线程被顶住）、封面用上
+     * 软解第一帧的有几次。 */
+    function abSeek() {
+        var N = 30, i = 0, ARMS = [200, 130], from = 0;
+        function one() {
+            if (i >= N) { return Promise.resolve(); }
+            window.__app.setCoverSeek(ARMS[i % 2]);
+            i++;
+            var before = st().id;
+            key(KEY.DOWN);
+            return waitShown(before, 15000).then(function () { return wait(5000); }).then(one);
+        }
+        return waitShown("", 40000).then(function () { return wait(5000); }).then(function () {
+            Log.report("AB", "开始：连刷 " + N + " 条，每条看 5 秒；seek 在 " + ARMS.join(" / ") + "ms 逐条轮换");
+            from = window.__app.records().length;
+            return one();
+        }).then(function () {
+            var rs = window.__app.records().slice(from).filter(function (r) { return r.push === "cover"; });
+            ARMS.forEach(function (m) {
+                var g = rs.filter(function (r) { return r.seekMs === m; });
+                Log.report("AB", "seek " + m + "ms：" + g.length + " 次，按键→playing 中位 " + median(g.map(function (r) { return r.playing; })) + "ms，按键→撤封面 中位 " +
+                           median(g.map(function (r) { return r.frame; })) + "ms，撤封面晚 >100ms " + g.filter(function (r) { return r.late > 100; }).length + " 次，封面用上软解第一帧 " +
+                           g.filter(function (r) { return r.ff; }).length + " 次 | 全部=" + g.map(function (r) { return r.frame + (r.ff ? "" : "图"); }).join(","));
+            });
+            window.__app.setCoverSeek(130);
+            Log.report("AB", "结束");
+        }, function (e) { Log.report("AB", "中止：" + e.message); });
+    }
+
+    var MODES = {abseek: abSeek, live: liveRun, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
     if (SELFTEST === "mse" || SELFTEST === "splice" || SELFTEST === "livemse") { return; }   // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();

@@ -77,7 +77,9 @@
      * "video"（让 <video> 自己滑走、真的推）在 MSE 下试过：移动过元素之后 seek 慢 ~1.1 秒、起播后还卡 ~1 秒，
      * 按键→撤封面 video 1661 / early 589ms（同一轮各 15 次）。不许动 <video> 的位置。 */
     var PUSH_MODE = "auto";
-    var COVER_SEEK_MS = 200;  // "cover"：盖到这时（缓动曲线走到 ~99%）才 seek，旧画面冻结 / 变黑只剩顶上几个像素
+    /* "cover"：整页盖到这时才 seek。原来 200ms（缓动曲线走到 ~99.5%）；2026-10-22 --abseek 同一轮逐条轮换两次，130ms（~95%）按键→画面动起来
+     * 中位 453 / 507ms、462 / 574ms，都更快。代价是顶上 ~5% 那一条旧画面在 seek 之后冻住 / 变黑 ~120ms，要人眼确认。 */
+    var COVER_SEEK_MS = 130;
     var coverPre = {};        // 预热时下好、解好的封面图（url → Image），推的时候直接贴，不再等 60–230ms
     var records = [];         // 每次切换的计时，自测 --ab 读
     var bootAt = Date.now();
@@ -331,7 +333,7 @@
      *   - 竖屏视频两侧是纯黑（用户要求：封面拉伸出来的模糊彩色背景抢注意力）。
      * **切换时画面上不许有 CSS 滤镜**：一层 blur(40px) 实测让每次切换多一秒多（见 CLAUDE.md）。
      * 「封面」那行日志报图用了多久、封面比例和视频比例。 */
-    function render(item, dir, push) {
+    function render(item, dir, push, startAt) {
         if (Comments.isOpen()) { closeComments(); }
         $("author").textContent = item.author ? "@" + item.author : "";
         chip = -1;
@@ -339,7 +341,7 @@
         paintAvatar(item);
         $("hint").textContent = "";
         $("desc").textContent = item.desc;
-        var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false, playingAt: 0, push: push};
+        var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false, playingAt: 0, push: push, seekMs: push === "cover" ? COVER_SEEK_MS : 0};
         $("loading").className = "";
         clearTimeout(slowTimer);
         slowTimer = setTimeout(function () { if (switchInfo === sw && !sw.playing && view === "feed") { $("loading").className = "show"; } }, SLOW_MS);
@@ -352,6 +354,7 @@
         im.style.left = box.l + "px"; im.style.top = box.t + "px";
         im.style.width = box.w + "px"; im.style.height = box.h + "px";
         im.style.backgroundImage = "none";
+        im.innerHTML = "";
         /* 推进来的是一整页（黑底 + 封面）：只滑封面图的话，竖屏视频两侧露着旧画面，到换源那一刻才被黑幕
          * 一下盖黑。 */
         var page = !!push;
@@ -359,7 +362,16 @@
         resetSlide(cv);
         resetSlide(im);
         var pre = item.cover && coverPre[item.cover];
-        if (pre && pre.complete && pre.naturalWidth) {
+        /* 从头放、预热时软解出了第一帧：封面就用它（seek 之后硬件出的第一帧就是这一帧，撤封面不跳；见 mse.js 的 decodeFirst）。
+         * 从中间接着放的不用 —— 那时出来的不是第一帧。 */
+        var ff = !(startAt > 1) ? Player.frameOf(item) : {canvas: null, why: "从中间接着放"};
+        sw.ff = ff.canvas ? "软解第一帧（" + ff.ms + "ms）" : "封面图（" + ff.why + "）";
+        if (ff.canvas) {
+            ff.canvas.className = "frame";
+            im.appendChild(ff.canvas);
+            sw.coverMs = 0;
+            sw.ar = ff.canvas.width / ff.canvas.height;
+        } else if (pre && pre.complete && pre.naturalWidth) {
             sw.coverMs = 0;
             sw.ar = pre.naturalWidth / pre.naturalHeight;
             im.style.backgroundImage = "url(\"" + item.cover + "\")";
@@ -421,7 +433,7 @@
         /* "video" 连按：旧视频正在滑走，让它接着滑，别先弹回原位再滑一遍。 */
         var keepSliding = wasPushing && push === "video";
         if (!keepSliding) { resetSlide(v); }
-        render(item, dir, push);
+        render(item, dir, push, startAt);
         if (!push || push === "early") {
             Player.play(item, where() + (push ? "·推(early)" : ""), startAt);
             return;
@@ -846,13 +858,15 @@
             var ar = function (x) { return x ? x.toFixed(2) : "?"; };
             /* 「到画面」那行从换源算起；"cover" 模式换源比按键晚 250ms，模式之间要比就得从按键算。 */
             var rec = {push: sw.push || "无", playing: sw.playingAt ? sw.playingAt - sw.at : -1, frame: Date.now() - sw.at,
-                       meta: ps.meta, warm: ps.warm, dur: Math.round(sw.item.dur / 1000), cover: sw.coverMs};
+                       meta: ps.meta, warm: ps.warm, dur: Math.round(sw.item.dur / 1000), cover: sw.coverMs,
+                       seekMs: sw.seekMs, late: lateMs, ff: /^软解/.test(sw.ff || "")};
             records.push(rec);
             if (records.length > 500) { records.shift(); }
-            Log.report("封面", (sw.coverMs < 0 ? "出画面时图还没到" : "图 " + sw.coverMs + "ms 到") + "（" + (sw.item.coverKind || "缓存条目") + "），比例 封面 " + ar(sw.ar) +
+            Log.report("封面", (sw.ff && /^软解/.test(sw.ff) ? sw.ff : (sw.coverMs < 0 ? "出画面时图还没到" : "图 " + sw.coverMs + "ms 到") + "（" + (sw.item.coverKind || "缓存条目") + "，" + (sw.ff || "") + "）") +
+                       "，比例 封面 " + ar(sw.ar) +
                        " / 接口给的视频 " + ar(sw.item.h ? sw.item.w / sw.item.h : 0) + " / 实际解码 " + ar(ps.vh ? ps.vw / ps.vh : 0) +
                        " | 撤封面：" + how + "，比 playing 晚 " + lateMs + "ms" +
-                       " | 按键→playing " + rec.playing + "ms →撤封面 " + rec.frame + "ms" + (sw.push ? " 推(" + sw.push + ")" : "") + " " + (ps.engine || "") +
+                       " | 按键→playing " + rec.playing + "ms →撤封面 " + rec.frame + "ms" + (sw.push ? " 推(" + sw.push + (sw.seekMs ? "，" + sw.seekMs + "ms 时 seek" : "") + ")" : "") + " " + (ps.engine || "") +
                        (ps.box >= 0 ? " | 改框→撤封面 " + ps.box + "ms" : ""));
         }
     }
@@ -1068,6 +1082,7 @@
         current: current,
         /* 自测 --ab 用：轮换切换方式、读每次切换的计时。 */
         setPush: function (m) { PUSH_MODE = m; },
+        setCoverSeek: function (ms) { COVER_SEEK_MS = ms; },
         records: function () { return records; },
         /* 自测 --diag 用：二维码页最底下那一排选中了哪一项。 */
         loginDiag: function () { return loginDiag; }
