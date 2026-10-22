@@ -62,17 +62,25 @@
 |---|---|---|
 | 适合 | 只想在电视上刷抖音 | 要改代码、要看诊断日志 |
 | 需要 | 电脑（Windows / macOS / Linux）**或安卓手机**，装上 [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung) | macOS、Node、Tizen Studio 命令行工具 |
-| 升级 | **1.2.0 起自动更新**（见下）；1.2.0 以前的再装一次新版 `.wgt` | `git pull`，再跑一次 `deploy.sh` |
+| 升级 | **1.2.0 起自动更新**（见下）；1.2.0 以前的用 Apps2Samsung 再装一次 | `git pull`，再跑一次 `deploy.sh` |
 
 **两条路都要先做这一步：** 电视上打开开发者模式——在「应用」页面用遥控器输入 `12345`，打开开关，Host PC IP 填装应用的
-那台电脑或手机的 IP——然后**把电视完整断电重启一次**。2023 年以后的三星电视只认三星签发的证书，两条路都会替你申请。
+那台电脑或手机的 IP——然后**把电视完整断电重启一次**。
+
+两条路都还要一个三星账号（没有就免费注册一个）：第一次安装时会让你登录，用来给这台电视申请证书，之后不用再管。
 
 ### 装发布包
 
-1. 到 [Releases](https://github.com/titlog/douyin-tizen/releases/latest) 下载 `douyin-tizen-<版本>.wgt`。
-2. 装 [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung/releases)，电脑版、安卓版都行。
-3. 打开它，选中你的电视（列表里没有就手动输入电视的 IP），应用选自定义 `.wgt`，选第 1 步下载的文件，安装。第一次会让你
-   登录三星账号，替这台电视签证书。
+1. 装 [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung/releases)，电脑版、安卓版都行。
+2. 打开它，选中你的电视（列表里没有就手动输入电视的 IP）。
+3. 在它的应用列表（社区目录）里找到 **Douyin (抖音)**，安装。第一次会让你登录三星账号，替这台电视签证书。
+
+社区目录每天从这里同步一次最新的发布包。想装目录还没同步到的新版本，或者某个指定版本：到
+[Releases](https://github.com/titlog/douyin-tizen/releases/latest) 下载 `douyin-tizen-<版本>.wgt`，第 3 步改选自定义 `.wgt`，
+选这个文件。
+
+**只有 iPhone？** Apps2Samsung 没有 iOS 版，侧载要一台电脑或者一部安卓手机。不过只需要装一次（之后新版本电视自己装），
+借一台电脑装一次就够了。
 
 ### 从源码装
 
@@ -144,11 +152,15 @@ Douyin's web API wants an `a_bogus` signature that only the site's own SDK, runn
 correctly. A Tizen web widget can script a `www.douyin.com` iframe, so the official SDK signs requests in a hidden
 frame. The details, measurements and pitfalls are in [`CLAUDE.md`](CLAUDE.md) (Chinese).
 
-Tested on a 2023 Samsung CU7090 (Tizen 9.0). The easy way to install: download `douyin-tizen-<version>.wgt` from
-[Releases](https://github.com/titlog/douyin-tizen/releases/latest) and install it with
-[Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung) (desktop or Android) as a custom `.wgt` — enable Developer
-Mode on the TV and power-cycle it first. From 1.2.0 the app updates itself (the new version runs after you quit and reopen it);
-older versions need the new `.wgt` installed once more. From source: set up the TV and the Samsung certificate with
-[bilibili-tizen](https://github.com/titlog/bilibili-tizen)'s `tools/setup.sh`, then run `zsh tools/deploy.sh` here.
+Tested on a 2023 Samsung CU7090 (Tizen 9.0). The easy way to install: enable Developer Mode on the TV and power-cycle it,
+then open [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung) (desktop or Android), select the TV and install
+**Douyin (抖音)** from its app list (the community catalog); the first install asks you to sign in to a Samsung account
+(free to create) to get the TV a certificate. The catalog picks up the latest release from here once a day; for a
+version it has not picked up yet, download `douyin-tizen-<version>.wgt` from
+[Releases](https://github.com/titlog/douyin-tizen/releases/latest) and install it as a custom `.wgt`. Only an iPhone?
+Apps2Samsung has no iOS version, but it is needed once, so borrowing a computer for the install is enough. From 1.2.0 the app
+updates itself (the new version runs after you quit and reopen it); older versions: install again with Apps2Samsung. From
+source: set up the TV and the Samsung certificate with [bilibili-tizen](https://github.com/titlog/bilibili-tizen)'s
+`tools/setup.sh`, then run `zsh tools/deploy.sh` here.
 
 MIT. mp4box.js is BSD-3-Clause. Not affiliated with Douyin, ByteDance or Samsung.

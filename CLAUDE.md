@@ -687,6 +687,9 @@ Playwright 的 Chrome 关掉跨域检查，按 `STEPS` 派发按键、截图；`
 3. `zsh tools/release.sh` 出 wgt，`gh release create`。
 4. 规则：改了 boot.js 对更新包的约定，`SHELL` 加一（旧电视跳过那一版，要重装）。**往 `config.xml` 的 CSP 里删 `blob:` 等于关掉自动更新**，
    而且只在下一次打开时才看得出来。
+5. 不用管 Apps2Samsung 的社区目录（README 里推荐的装法）：它每天按 `releases/latest` 自己取新的 wgt
+   （`Apps2Samsung/tizen-community-packages` 的 `packages/titlog__douyin-tizen.json`，按 `douyin-tizen-.*[.]wgt$` 挑资产），
+   所以 wgt 要一直叫 `douyin-tizen-<版本>.wgt`。
 
 ## 诊断日志（2026-10-21，用户要求，照搬 bilibili）
 
