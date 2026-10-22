@@ -78,17 +78,17 @@ async function shot(name) {
   execFileSync('sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '82', '-Z', '1600', png, '--out', OUT + name + '.jpg'], {stdio: 'ignore'});
   log('截图 ' + name);
 }
-/* 暂停、下键选中那一排、右键挪到 name。 */
+/* 暂停、下键选中右边那一列的头像、再下键往下走到 name（合集在最后，左下那一条）。 */
 async function chip(name) {
   await key(13); await sleep(600); await key(40); await sleep(300);
-  for (let i = 0; i < 6 && await ev(() => window.__app.chip()) !== name; i++) await key(39);
+  for (let i = 0; i < 6 && await ev(() => window.__app.chip()) !== name; i++) await key(40);
   if (await ev(() => window.__app.chip()) !== name) throw new Error('选不中「' + name + '」');
 }
 
 await page.goto('http://localhost:8766/index.html');
 await shown();
 
-/* 头图用开机第一条（全新浏览器、没登录时推荐流给的第一条，画面干净），一出画面就截：作者、标题、数字那一排 5 秒后淡出。 */
+/* 头图用开机第一条（全新浏览器、没登录时推荐流给的第一条，画面干净），一出画面就截：左下的作者、标题和右边那一列 5 秒后淡出。 */
 await sleep(300);
 await shot('01-feed');
 await sleep(8000);                           // 片头那几秒是一片白光，放一会儿再暂停

@@ -111,9 +111,11 @@
             return wait(500);
         }).then(function () {
             var s1 = st();
-            var focused = document.getElementById("author").className === "focus";
-            check("暂停时下键选中作者（不换视频）", focused && s1.paused && s1.id === from.id,
-                  "作者块=" + (focused ? "亮了" : "没亮") + "，暂停=" + s1.paused + "，同一条=" + (s1.id === from.id) + "，提示=" + document.getElementById("hint").textContent);
+            var av = document.getElementById("act-author");
+            var focused = /\bfocus\b/.test(av.className) && av.offsetWidth > 0;
+            check("暂停时下键选中右边的头像（不换视频）", focused && s1.paused && s1.id === from.id,
+                  "头像=" + (focused ? "亮了" : "没亮") + "（图 " + document.getElementById("rail-avatar").naturalWidth + "px）" + "，暂停=" + s1.paused + "，同一条=" + (s1.id === from.id) +
+                  "，旁边「" + av.textContent + "」，提示=" + document.getElementById("hint").textContent);
             if (!focused) { throw new Error("没选中作者，后面的作者主页步骤不跑了"); }
             key(KEY.ENTER);
             t0 = Date.now();
@@ -733,7 +735,7 @@
         }
         return poll();
     }
-    /* 暂停、下键选中那一排、右键挪到 name 那一个。回挪到没有。 */
+    /* 暂停、下键选中右边那一列的头像、再下键往下走到 name 那一个（合集在最后，左下那一条）。走不到就是没有。 */
     function pickChip(name) {
         if (!st().paused) { key(KEY.ENTER); }
         return wait(800).then(function () {
@@ -742,7 +744,7 @@
             function step() {
                 if (window.__app.chip() === name) { return Promise.resolve(true); }
                 if (n++ >= 6) { return Promise.resolve(false); }
-                key(KEY.RIGHT);
+                key(KEY.DOWN);
                 return wait(250).then(step);
             }
             return wait(300).then(step);
@@ -864,13 +866,24 @@
         }).then(function (ms) {
             var g = Grid.state();
             check("「收藏」出网格或说是空的", ms >= 0 && !/失败/.test(g.foot), ms + "ms，" + g.cards + " 张卡片，底下「" + g.foot + "」");
-            key(KEY.RIGHT);
-            return wait(600);
+            /* 收藏和退出登录之间还有诊断日志那两项（2026-10-21 加的，之前这里只按一次右键，落在诊断日志上判 FAIL）。 */
+            var n = 0;
+            function toLogout() {
+                if (Grid.state().tab === "logout" || n++ >= 5) { return wait(600); }
+                key(KEY.RIGHT);
+                return wait(300).then(toLogout);
+            }
+            return toLogout();
         }).then(function () {
             var g = Grid.state();
             check("「退出登录」那一项只写提示（没按确认）", g.tab === "logout" && /退出登录/.test(g.foot) && Account.loggedIn(), "底下「" + g.foot + "」");
-            key(KEY.LEFT); key(KEY.LEFT); key(KEY.LEFT);
-            return wait(800);
+            var n = 0;
+            function toHistory() {
+                if (Grid.state().tab === "history" || n++ >= 8) { return wait(800); }
+                key(KEY.LEFT);
+                return wait(300).then(toHistory);
+            }
+            return toHistory();
         }).then(function () {
             key(KEY.LEFT);                   // 观看历史再往左 → 推荐
             return waitShown("", 15000);

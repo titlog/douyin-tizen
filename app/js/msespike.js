@@ -368,7 +368,7 @@
         Player.stop(true);
         var old = document.getElementById("va");
         if (old) { old.style.display = "none"; }
-        ["cover", "mask", "info", "tabs", "loading", "paused", "progress"].forEach(function (id) {
+        ["cover", "mask", "info", "rail", "tabs", "loading", "paused", "progress"].forEach(function (id) {
             var e = document.getElementById(id);
             if (e) { e.style.display = "none"; }
         });

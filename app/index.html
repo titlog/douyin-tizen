@@ -11,12 +11,21 @@
 <video id="va"></video>
 <div id="cover"><div class="img"></div></div>
 
+<!-- 和手机上一样（2026-10-22 用户要求）：左下是作者、简介、合集那一条；右边一列是头像（进主页）· 赞 · 评论 · 收藏 · 分享。
+     暂停时下键选中，app.js 的 chips() 说哪几个能选。图标是内联 SVG：HTML 里的 style 属性被 CSP 拦（见 CLAUDE.md），fill 这类属性不算。 -->
 <div id="info">
   <div id="author"></div>
   <div id="desc"></div>
-  <div id="stats"><span id="act-like" class="act"></span><span id="act-collect" class="act"></span><span id="act-comment" class="act"></span><span id="act-mix" class="act"></span></div>
+  <div id="act-mix" class="act"></div>
   <div id="time"></div>
   <div id="hint"></div>
+</div>
+<div id="rail">
+  <div id="act-author" class="act"><img id="rail-avatar" alt=""><span class="tip"></span></div>
+  <div id="act-like" class="act"><span class="ic"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></span><span class="n"></span><span class="tip"></span></div>
+  <div id="act-comment" class="act"><span class="ic"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 3C6.48 3 2 6.92 2 11.5c0 2.47 1.3 4.69 3.37 6.2L4.6 21.4l4.1-2.17c1.04.3 2.15.47 3.3.47 5.52 0 10-3.92 10-8.5S17.52 3 12 3z"/><circle fill="#3a3a44" cx="7.6" cy="11.5" r="1.35"/><circle fill="#3a3a44" cx="12" cy="11.5" r="1.35"/><circle fill="#3a3a44" cx="16.4" cy="11.5" r="1.35"/></svg></span><span class="n"></span><span class="tip"></span></div>
+  <div id="act-collect" class="act"><span class="ic"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg></span><span class="n"></span><span class="tip"></span></div>
+  <div id="act-share" class="act"><span class="ic"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M14 8.5V4l8 7.5-8 7.5v-4.6c-5.4 0-9 1.7-12 5.6 1.1-5.6 4.4-10.6 12-11.5z"/></svg></span><span class="n"></span></div>
 </div>
 <div id="tabs"></div>
 

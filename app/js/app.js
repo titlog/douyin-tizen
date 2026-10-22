@@ -9,11 +9,11 @@
  *   左右键 → 切标签（暂停时改为快退 / 快进 10 秒）
  *   快进 / 快退键 → 任何时候都快进 / 快退 10 秒
  *   确认 / 播放暂停键 → 暂停
- *   暂停时下键 → 选中下面那一排：作者 · 评论 · 合集（左右键换，确认键做，上键 / 返回键取消）
- *     作者 → 作者主页，合集 → 选集（都是 js/grid.js 的网格页），评论 → 右边的评论侧栏（js/comments.js）
+ *   暂停时下键 → 选中右边那一列的头像，上下键往下走：头像 · 评论 · 合集（左下那一条；左右键也能在它和右边那列之间跳），
+ *     确认键做，返回键 / 在头像上按上键取消。头像 → 作者主页，合集 → 选集（都是 js/grid.js 的网格页），评论 → 右边的评论侧栏（js/comments.js）
  *   网格页（作者主页、「我」、选集）：确认键从这一条开始放，放着的时候上下键在这一页里刷；返回键一层层退回来
  *   返回键按两次 → 退出
- * 竖屏视频居中、两侧纯黑；横屏视频铺满。
+ * 竖屏视频居中、两侧纯黑；横屏视频铺满。视频上的信息照手机摆：左下 @作者、简介、合集，右边一列头像 · 赞 · 评论 · 收藏 · 分享。
  */
 (function () {
     "use strict";
@@ -114,14 +114,19 @@
      * （它们是更深的一层），「我」上有（它就是一个标签）；评论侧栏开着时两个都收起来。 */
     function showInfo(withTabs) {
         var cm = Comments.isOpen();
-        $("info").className = view === "feed" && !cm ? "show" : "";
+        setInfo(view === "feed" && !cm);
         var e = topPage();
         var tabs = view === "grid" ? e.page.kind === "me" : !cm && (withTabs || view !== "feed" || Player.isPaused());
         $("tabs").className = tabs ? "show" : "";
         clearTimeout(infoTimer);
         infoTimer = setTimeout(function () {
-            if (view === "feed" && !Player.isPaused()) { $("info").className = ""; $("tabs").className = ""; }
+            if (view === "feed" && !Player.isPaused()) { setInfo(false); $("tabs").className = ""; }
         }, 5000);
+    }
+    /* 左下那块和右边那一列一起出来、一起淡出。 */
+    function setInfo(on) {
+        $("info").className = on ? "show" : "";
+        $("rail").className = on ? "show" : "";
     }
 
     function markTabs() {
@@ -140,39 +145,58 @@
         $("tabs").innerHTML = html;
     }
 
-    // ---------- 暂停时下面那一排：作者 · 点赞 · 收藏 · 评论 · 合集 ----------
+    // ---------- 暂停时能选中的：右边那一列（头像 · 点赞 · 评论 · 收藏）和左下的合集 ----------
 
     var CHIP_NAME = {author: "作者", like: "点赞", collect: "收藏", comment: "评论", mix: "合集"};
     /* 点赞、收藏能不能选：跟着 Act.ready()。2026-10-18 电视上 --like：点赞回空正文、再试 HTTP 403，收藏回 status_code=8
      * 「用户未登录」，而且第一个点赞请求之后服务器作废了电视上的登录 —— 官网发这两个请求时带 bd-ticket-guard-client-data 这套头
      * （另一个安全 SDK 算的，打包在官网主程序里，装不进签名桥），我们没有。数字照常显示（手机上赞过的照样是红心），这两项不能选。 */
     var actTest = false;      // 自测 --like 把这两项放出来（Act 自己还是不发）
+    /* 顺序就是上下键走的顺序：右边那一列从上往下（和手机一样：头像、赞、评论、收藏），最后是左下的合集。分享只显示数字。 */
     function chips(it) {
         if (!it) { return []; }
         var c = it.secUid ? ["author"] : [];
-        if (Act.ready() || actTest) { c.push("like", "collect"); }
+        var acts = Act.ready() || actTest;
+        if (acts) { c.push("like"); }
         c.push("comment");
+        if (acts) { c.push("collect"); }
         if (it.mix) { c.push("mix"); }
         return c;
     }
     function current() { return view === "feed" && feed() ? feed().current() : null; }
 
-    /* 数字那一排：赞过的心是红的、收过的星是黄的，选中的那个是红底块，等服务器回的时候半透明。 */
+    /* 右边那一列的数字和左下的合集：赞过的心是红的、收过的星是黄的，选中的那个垫红底、左边冒出「确认键……」，
+     * 等服务器回的时候半透明。 */
     function paintActs(it) {
         it = it || current();
         if (!it) { return; }
         var on = chip >= 0 ? chips(it)[chip] : "";
         var set = function (k, txt, lit, shown) {
             var el = $("act-" + k);
-            el.textContent = txt;
+            var n = el.querySelector(".n"), tip = el.querySelector(".tip");
+            if (n) { n.textContent = txt; } else if (txt !== null) { el.textContent = txt; }
+            if (tip) { tip.textContent = on === k ? chipHint(k, it) : ""; }
             el.className = "act" + (lit ? " lit" : "") + (on === k ? " focus" : "") + (acting === k + ":" + it.id ? " busy" : "");
             el.style.display = shown === false ? "none" : "";
         };
-        set("like", "♥ " + count(it.likes), it.digged);
-        set("collect", "★ " + (it.collects ? count(it.collects) : "收藏"), it.collected);
-        set("comment", "💬 " + count(it.comments));
-        set("mix", it.mix ? "合集 · 第 " + it.mix.ep + " 集" + (it.mix.total ? " / 共 " + it.mix.total + " 集" : "") : "", false, !!it.mix);
-        $("author").className = on === "author" ? "focus" : "";
+        set("author", null, false, !!it.secUid || !!it.avatar);
+        set("like", count(it.likes), it.digged);
+        set("comment", count(it.comments));
+        set("collect", it.collects ? count(it.collects) : "收藏", it.collected);
+        set("share", it.shares ? count(it.shares) : "分享");
+        set("mix", it.mix ? "合集 · " + it.mix.name + " · 第 " + it.mix.ep + " 集" + (it.mix.total ? " / 共 " + it.mix.total + " 集" : "") : "", false, !!it.mix);
+    }
+    /* 换一条时换头像。旧头像不许留到新图到之前（换 src 时 Chromium 先接着画旧图）：先藏起来，到了再亮；
+     * 下一两条的头像预热时就下好了（schedulePreload），多半当场就有。 */
+    function paintAvatar(it) {
+        var av = $("rail-avatar");
+        if (!it.avatar) { av.removeAttribute("src"); av.style.visibility = "hidden"; return; }
+        if (av.getAttribute("src") === it.avatar) { return; }
+        av.style.visibility = "hidden";
+        av.onload = function () { av.style.visibility = ""; };
+        av.onerror = function () { av.style.visibility = "hidden"; };
+        av.src = it.avatar;
+        if (av.complete && av.naturalWidth) { av.style.visibility = ""; }
     }
     function setChip(i) {
         chip = i;
@@ -187,14 +211,24 @@
         if (k === "comment") { return "确认键看评论"; }
         return e && e.page.kind === "mix" && e.page.mixId === it.mix.id ? "确认键回到选集" : "确认键打开合集《" + it.mix.name + "》选集";
     }
+    /* 左下最底下那一行。选中右边那一列的时候，「确认键做什么」写在那个图标左边，这里只写怎么走。 */
     function hint() {
         var it = current();
         var h = "";
         if (it && Player.isPaused() && !Comments.isOpen()) {
-            var c = chips(it);
-            h = chip < 0 ? "下键选中 " + c.map(function (k) { return CHIP_NAME[k]; }).join(" · ") : chipHint(c[chip], it) + " · 左右键换 · 上键取消";
+            var c = chips(it), k = c[chip];
+            h = chip < 0 ? "下键选中 " + c.map(function (x) { return CHIP_NAME[x]; }).join(" · ") :
+                (k === "mix" ? chipHint(k, it) + " · " : "") + "上下键换 · 返回键取消";
         }
         $("hint").textContent = h;
+    }
+    /* 选中时的方向键：上下键按 chips() 的顺序走（最上面那个再往上是取消）；左右键在右边那一列和左下的合集之间跳。 */
+    function chipKey(k) {
+        var c = chips(current()), at = c[chip];
+        if (k === KEY.DOWN) { setChip(Math.min(c.length - 1, chip + 1)); }
+        else if (k === KEY.UP) { setChip(chip - 1); }
+        else if (k === KEY.LEFT) { if (at !== "mix" && c[c.length - 1] === "mix") { setChip(c.length - 1); } }
+        else if (k === KEY.RIGHT) { if (at === "mix") { setChip(Math.max(0, c.length - 2)); } }
     }
     function doChip() {
         var it = current();
@@ -247,7 +281,6 @@
         if (v !== "grid") { $("grid-page").className = ""; }
         if (Comments.isOpen()) { Comments.close(); }
         chip = -1;
-        $("author").className = "";
         if (v !== "feed") {
             $("cover").className = "";
             clearTimeout(pushTimer);
@@ -255,7 +288,7 @@
             resetSlide($("va"));
             resetSlide($("cover"));
             $("mask").className = "";
-            $("info").className = "";
+            setInfo(false);
             $("loading").className = "";
             $("paused").className = "";
         }
@@ -294,6 +327,7 @@
         $("author").textContent = item.author ? "@" + item.author : "";
         chip = -1;
         paintActs(item);
+        paintAvatar(item);
         $("hint").textContent = "";
         $("desc").textContent = item.desc;
         var sw = switchInfo = {at: Date.now(), item: item, coverMs: -1, ar: 0, playing: false, playingAt: 0, push: push};
@@ -334,6 +368,7 @@
         $("bar").style.width = "0";
         $("paused").className = "";
         $("progress").className = "";
+        $("time").className = "";
         showInfo();
     }
 
@@ -401,6 +436,7 @@
             var nx = feed().peek(n);
             if (!nx) { return; }
             Player.preload(nx, PRELOAD_MODE);
+            if (nx.avatar) { new Image().src = nx.avatar; }     // 右边那一列的头像，切过去时当场就有
             if (nx.cover && !coverPre[nx.cover]) {
                 var ci = new Image();
                 ci.src = nx.cover;
@@ -472,6 +508,7 @@
         var p = Player.toggle();
         $("paused").className = p ? "show" : "";
         $("progress").className = p ? "show" : "";
+        $("time").className = p ? "show" : "";
         chip = -1;
         showInfo(p);
         paintActs();
@@ -870,12 +907,9 @@
             e.preventDefault();
             return;
         }
-        /* 下面那一排选中了：左右键在里面换，确认键做，上键取消。 */
+        /* 右边那一列（或左下的合集）选中了：方向键在里面走（chipKey），确认键做。 */
         if (chip >= 0) {
-            var n = chips(current()).length;
-            if (k === KEY.LEFT) { setChip(Math.max(0, chip - 1)); }
-            else if (k === KEY.RIGHT) { setChip(Math.min(n - 1, chip + 1)); }
-            else if (k === KEY.UP) { setChip(-1); }
+            if (k === KEY.UP || k === KEY.DOWN || k === KEY.LEFT || k === KEY.RIGHT) { chipKey(k); }
             else if (k === KEY.ENTER) { doChip(); }
             else if (k === KEY.PLAY_PAUSE || k === KEY.PLAY || k === KEY.PAUSE) { togglePause(); }
             e.preventDefault();
@@ -884,7 +918,7 @@
         var inPage = !!topPage();
         switch (k) {
         case KEY.DOWN:
-            /* 暂停时下键是选中下面那一排（作者、点赞……）。频道减键照旧是下一条。 */
+            /* 暂停时下键是选中右边那一列（从头像开始）。频道减键照旧是下一条。 */
             if (Player.isPaused()) { if (current()) { setChip(0); } break; }
             next("下键"); break;
         case KEY.CH_DOWN:

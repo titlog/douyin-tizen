@@ -201,6 +201,7 @@ var Feed = (function () {
             likes: st.digg_count || 0,
             comments: st.comment_count || 0,
             collects: st.collect_count || 0,
+            shares: st.share_count || 0,  // 右边那一列的分享数（只显示）；缓存里的旧条目没有，显示「分享」
             digged: !!a.user_digged,      // 登录时：这个账号赞过没有（喜欢列表里的都是 1）
             collected: !!a.collect_stat,
             mix: mixOf(a)
