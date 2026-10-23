@@ -52,6 +52,10 @@ var Diag = (function () {
      * 还是不传的：自测构建（出的事是造的），DIAG_TO 是 "off"（deploy.sh 照 DOUYIN_DIAG_TO=off 写，这个项目自己的电脑配置里写着）。
      * DIAG_TO 是别的地址就传到那里（--diag：本机冒充的接收端）。比这个文件老的安装包里 config.js 可能没有 DIAG_TO，所以用 typeof。 */
     function endpoint() {
+        /* 桌面浏览器（测试台、README 截图）不是谁的电视，接收端只收电视的：UA 里没有 Tizen 就不传。2026-10-22 抖音的桌面测试台
+         * 没拦接收端，跑写到一半的代码报的 js 错误传上去两条，看着像两台新电视。到现在为止的真电视，3.0 到 9.0，UA 都是
+         * 「SMART-TV; LINUX; Tizen x.y」。 */
+        if (!/Tizen/.test(typeof navigator !== "undefined" && navigator.userAgent || "")) { return ""; }
         var override = typeof DIAG_TO !== "undefined" ? DIAG_TO : "";
         if (override === "off") { return ""; }
         if (override) { return override; }

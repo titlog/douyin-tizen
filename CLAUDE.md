@@ -794,7 +794,8 @@ Playwright 的 Chrome 关掉跨域检查，按 `STEPS` 派发按键、截图；`
   那行字变了，不弹提示。
 - **从源码装的构建也传**（2026-10-23，照 bilibili 1.4.1：别人的源码构建出了事，一行都到不了我们这），和发布包一样传到 `diag.js` 的 `ENDPOINT`；
   自测构建不传，`DOUYIN_DIAG_TO=off` 不传（**这台开发机的 `~/.bilibili-tizen.conf` 里写着**，换电脑要补上），`DOUYIN_DIAG_TO=<地址>` 传到那里，
-  `--diag` 没给地址（或是 off）就传到这台电脑的 :8097。`release.sh` 卡着 `ENDPOINT` 是 https、`DIAG_TO` 是空串。`diag.js` 排在 SCRIPTS 最前（`log.js` 一加载就用它）。
+  `--diag` 没给地址（或是 off）就传到这台电脑的 :8097。**桌面浏览器（UA 里没有 Tizen）一律不传**：10-22 桌面测试台没拦接收端，
+  跑写到一半的代码报的 `abSeek is not defined` 传上去两条，像两台新电视。`release.sh` 卡着 `ENDPOINT` 是 https、`DIAG_TO` 是空串。`diag.js` 排在 SCRIPTS 最前（`log.js` 一加载就用它）。
 - 测量（同一天）：电视 `--diag` 6 步全过（手动传、关掉缓冲清空、再开、造一次出事 8 秒后自动传、回推荐接着放），读回传上去的那份：
   作者名、文案全是「…」，签名参数、sec_uid 一个没有；完整 `--selftest` 26 步全过。电视登录着，二维码页那一排在桌面测试台
   （Playwright，抖音的请求全拦掉）里走过：签名桥起不来 → 「连不上抖音」自动传了一份，那一排的选中、上传、开关、返回键都对。

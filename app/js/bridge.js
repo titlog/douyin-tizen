@@ -185,7 +185,7 @@ var Bridge = (function () {
             return installSdk(win);
         }).then(function (how) {
             Log.report("bridge", "就绪 " + (Date.now() - t0) + "ms（框 " + marks.frame + " ttwid " + marks.ttwid +
-                       " 三个 SDK 并行 " + marks.sdk + " glue 装 bdms " + marks.bdms + "；bdms 由 " + how + "）");
+                       " 三个 SDK 并行 " + marks.sdk + " glue 装 bdms " + marks.bdms + "；bdms 由 " + how + "），框在 " + frameHost());
         });
     }
 
@@ -194,6 +194,12 @@ var Bridge = (function () {
             readyPromise = init().catch(function (e) { readyPromise = null; throw e; });
         }
         return readyPromise;
+    }
+
+    /* 框实际在哪个主机上。接口请求是在框里按相对路径发的，框要是被重定向走了，请求就发到了别处。2026-10-22 一台别人的电视：
+     * 签名桥就绪、框里一个 cookie 都没有、所有接口「连接失败」，日志分不出是网络拦了还是框不在 douyin.com 上。 */
+    function frameHost() {
+        try { return frame.contentWindow.location.host || "空"; } catch (e) { return "读不到（" + e.name + "）"; }
     }
 
     /* 拆掉重建。签名 SDK 的状态、框里的 cookie 视图都跟着重来 —— 连续几次拿到
@@ -232,7 +238,12 @@ var Bridge = (function () {
                     try { ok(JSON.parse(t)); } catch (e) { bad(new Error("不是 JSON：" + t.slice(0, 30))); }
                 };
                 x.ontimeout = function () { bad(new Error("12 秒无响应")); };
-                x.onerror = function () { bad(new Error("连接失败")); };
+                /* 多久失败的能分开原因：几百毫秒就失败多半是被拦（DNS、过滤、TLS），上万毫秒是连不上 */
+                x.onerror = function () {
+                    Log.report("bridge", "连接失败：" + path.replace(/^\/aweme\/v\d\/web\//, "") + " " + (Date.now() - sent) + "ms，框在 " + frameHost());
+                    bad(new Error("连接失败"));
+                };
+                var sent = Date.now();
                 x.send(method === "POST" ? (body || "") : null);
             }), 15000, path.replace(/^\/aweme\/v\d\/web\//, ""));
         }).then(function (j) { if (!quiet) { failures = 0; } return j; }, function (e) {

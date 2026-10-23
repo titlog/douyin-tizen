@@ -23,7 +23,7 @@ async function t(name, fn) {
 
 /* ---------------- 给 diag.js 一台电视 ---------------- */
 
-function television({ storage = new Map(), reportTo = "", diagTo = "https://diag.test/v1/upload", selftest = false, start = Date.UTC(2026, 9, 21, 4), withLog = false } = {}) {
+function television({ ua = "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36", storage = new Map(), reportTo = "", diagTo = "https://diag.test/v1/upload", selftest = false, start = Date.UTC(2026, 9, 21, 4), withLog = false } = {}) {
   let clock = start;
   const timers = new Map(); let nextTimer = 1;
   const sent = [], reported = [], collector = [];
@@ -54,7 +54,7 @@ function television({ storage = new Map(), reportTo = "", diagTo = "https://diag
   const sandbox = {
     Date: FakeDate, Math, JSON, String, Number, Uint8Array, RegExp,
     localStorage, XMLHttpRequest: XHR,
-    navigator: { userAgent: "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36" },
+    navigator: { userAgent: ua },
     window: { crypto: { getRandomValues: (a) => { for (let i = 0; i < a.length; i++) a[i] = (i * 37 + 11) % 256; return a; } },
               addEventListener() {} },
     document: { hidden: false, addEventListener() {} },
@@ -300,6 +300,16 @@ await t("从源码装的和发布包一样传（diag.js 自己的 https 地址�
   assert.match(cfg, /^var DIAG_TO = "";$/m, "config.js 里的 DIAG_TO 要是空串（deploy.sh 中途退出留下的？）");
 });
 
+
+await t("桌面浏览器不传（UA 里没有 Tizen）：发布构建、给了地址的也不传", () => {
+  const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  for (const desk of [television({ ua: MAC, reportTo: "", diagTo: "" }),
+                      television({ ua: MAC, reportTo: "http://10.0.0.2:8099/report", diagTo: "http://10.0.0.2:8097/v1/upload" })]) {
+    desk.Diag.incident("连续好几条都放不了"); desk.advance(60000);
+    assert.equal(desk.sent.length, 0);
+    assert.equal(desk.Diag.status().configured, false);
+  }
+});
 await t("boot.js：diag.js 排在最前（log.js 一加载就要用它）", () => {
   const boot = fs.readFileSync(here("../app/js/boot.js"), "utf8");
   const list = [.../var SCRIPTS = \[([^\]]*)\]/.exec(boot)[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
