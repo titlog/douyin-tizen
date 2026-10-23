@@ -28,7 +28,7 @@ for a in "$@"; do
     --mix) SELFTEST='"mix"' ;;      # 推荐里找一条带合集的，选集 → 接着放 → 下一集 → 返回两次；只读（约 1–3 分钟）
     --like) SELFTEST='"like"' ;;    # 点赞、收藏各一来一回。没有 ticket guard 头时 Act 不发；2026-10-18 不带头发过一次，服务器作废了登录
     --diag) SELFTEST='"diag"' ;;    # 诊断日志：「我」里手动传一次、关掉再打开、造一次出事自动传（约 1 分钟）；
-                                    # 传到 DOUYIN_DIAG_TO，默认这台电脑上的 node ../bilibili-tizen/tools/diag-local.mjs（先开着）
+                                    # 传到 DOUYIN_DIAG_TO 给的地址，没给（或是 off）就传到这台电脑上的 node ../bilibili-tizen/tools/diag-local.mjs（先开着）
   esac
 done
 # 应用 id 从 config.xml 读，不写死 —— bilibili 那边改过一次应用名，安装器推旧包、启动步骤
@@ -80,8 +80,9 @@ if [ -n "$DOUYIN_UPDATE_MANIFEST" ]; then
   sed -i '' -E "s#^var UPDATE_MANIFEST = \"[^\"]*\";#var UPDATE_MANIFEST = \"$DOUYIN_UPDATE_MANIFEST\";#" "$APP/js/config.js"
   echo "  update manifest=$DOUYIN_UPDATE_MANIFEST"
 fi
-# 诊断日志传到哪：开发构建默认不传（有收集器），--diag 默认传到这台电脑上的冒充接收端。
-[ "$SELFTEST" = '"diag"' ] && DOUYIN_DIAG_TO="${DOUYIN_DIAG_TO:-http://$HOST_IP:8097/v1/upload}"
+# 诊断日志传到哪：从源码装的和发布包一样传（2026-10-23）；DOUYIN_DIAG_TO=off 不传（这个项目自己的电脑在 ~/.bilibili-tizen.conf 里写着，
+# 收集器什么都有）；--diag 没给地址就传到这台电脑上的冒充接收端（配置里的 off 不算地址）。自测构建一律不传（diag.js）。
+[ "$SELFTEST" = '"diag"' ] && [ "${DOUYIN_DIAG_TO:-off}" = off ] && DOUYIN_DIAG_TO="http://$HOST_IP:8097/v1/upload"
 if [ -n "$DOUYIN_DIAG_TO" ]; then
   sed -i '' -E "s#^var DIAG_TO = \"[^\"]*\";#var DIAG_TO = \"$DOUYIN_DIAG_TO\";#" "$APP/js/config.js"
   echo "  diag -> $DOUYIN_DIAG_TO"

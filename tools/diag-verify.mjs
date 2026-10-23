@@ -23,7 +23,7 @@ async function t(name, fn) {
 
 /* ---------------- 给 diag.js 一台电视 ---------------- */
 
-function television({ storage = new Map(), reportTo = "", diagTo = "https://diag.test/v1/upload", start = Date.UTC(2026, 9, 21, 4), withLog = false } = {}) {
+function television({ storage = new Map(), reportTo = "", diagTo = "https://diag.test/v1/upload", selftest = false, start = Date.UTC(2026, 9, 21, 4), withLog = false } = {}) {
   let clock = start;
   const timers = new Map(); let nextTimer = 1;
   const sent = [], reported = [], collector = [];
@@ -60,10 +60,13 @@ function television({ storage = new Map(), reportTo = "", diagTo = "https://diag
     document: { hidden: false, addEventListener() {} },
     console: { log() {} },
     Boot: { info: () => ({ packaged: "1.2.0", running: "1.3.0", note: "" }), scriptName: (s) => s },
-    REPORT_TO: reportTo, DIAG_TO: diagTo,
+    REPORT_TO: reportTo, DIAG_TO: diagTo, SELFTEST: selftest,
     setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, at: clock + (ms || 0) }); return id; },
     clearTimeout: (id) => { timers.delete(id); },
   };
+  /* null：比这两个都老的 config.js */
+  if (diagTo === null) { delete sandbox.DIAG_TO; }
+  if (selftest === null) { delete sandbox.SELFTEST; }
   vm.createContext(sandbox);
   vm.runInContext(SRC, sandbox, { filename: "diag.js" });
   const Diag = sandbox.Diag;
@@ -272,17 +275,27 @@ await t("服务器拒绝：写进状态，不当成功", () => {
   assert.match(tv.Diag.status().last.why, /HTTP 429 too many/);
 });
 
-await t("开发构建不传（除非 deploy.sh 给了 DIAG_TO）；发布构建用 diag.js 自己的 https 地址", () => {
-  const dev = television({ reportTo: "http://10.0.0.2:8098", diagTo: "" });
-  dev.Diag.incident("连续好几条都放不了"); dev.advance(60000);
-  assert.equal(dev.sent.length, 0);
-  assert.equal(dev.Diag.status().configured, false);
-  const pointed = television({ reportTo: "http://10.0.0.2:8098", diagTo: "http://10.0.0.2:8097/v1/upload" });
-  assert.equal(pointed.Diag._test.endpoint(), "http://10.0.0.2:8097/v1/upload");
-  const release = television({ reportTo: "", diagTo: "" });
+await t("从源码装的和发布包一样传（diag.js 自己的 https 地址）；DIAG_TO=off、自测构建不传；DIAG_TO 给了地址就传那里", () => {
   const ENDPOINT = /var ENDPOINT = "([^"]*)";/.exec(SRC)[1];
   assert.match(ENDPOINT, /^https:\/\//);
+  const lan = "http://10.0.0.2:8098";
+  const release = television({ reportTo: "", diagTo: "" });
   assert.equal(release.Diag._test.endpoint(), ENDPOINT);
+  const source = television({ reportTo: lan, diagTo: "" });
+  assert.equal(source.Diag._test.endpoint(), ENDPOINT);
+  assert.equal(source.Diag.status().configured, true);
+  /* 比 DIAG_TO、SELFTEST 都老的安装包，更新到这份 diag.js */
+  const old = television({ reportTo: lan, diagTo: null, selftest: null });
+  assert.equal(old.Diag._test.endpoint(), ENDPOINT);
+  for (const quiet of [television({ reportTo: lan, diagTo: "off" }),
+                       television({ reportTo: lan, diagTo: "", selftest: true }),
+                       television({ reportTo: lan, diagTo: "", selftest: "probe" })]) {
+    quiet.Diag.incident("连续好几条都放不了"); quiet.advance(60000);
+    assert.equal(quiet.sent.length, 0);
+    assert.equal(quiet.Diag.status().configured, false);
+  }
+  const pointed = television({ reportTo: lan, diagTo: "http://10.0.0.2:8097/v1/upload", selftest: "diag" });
+  assert.equal(pointed.Diag._test.endpoint(), "http://10.0.0.2:8097/v1/upload");
   const cfg = fs.readFileSync(here("../app/js/config.js"), "utf8");
   assert.match(cfg, /^var DIAG_TO = "";$/m, "config.js 里的 DIAG_TO 要是空串（deploy.sh 中途退出留下的？）");
 });

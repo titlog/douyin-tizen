@@ -47,14 +47,16 @@ var Diag = (function () {
     /* 这里没有 settings.js（属于这台电视的设置只有这一个），开关直接记在 localStorage。 */
     function enabled() { return get(K_OFF) !== "1"; }
 
-    /* 开发构建（REPORT_TO 非空，自测构建也是）有收集器，什么都不传 —— 除非 deploy.sh 给了地址
-     * （DOUYIN_DIAG_TO → config.js 的 DIAG_TO），在电视上测上传这条路就靠它。比这个文件老的安装包里，
-     * config.js 没有 DIAG_TO，所以用 typeof。 */
+    /* 从源码装的构建和发布包一样传（2026-10-23，照 bilibili 1.4.1）。以前开发构建（REPORT_TO 非空）什么都不传，理由是
+     * 收集器什么都有 —— 只在这个项目自己的电脑上成立：别人从源码装的出了事，一行都到不了谁手里（bilibili #7）。
+     * 还是不传的：自测构建（出的事是造的），DIAG_TO 是 "off"（deploy.sh 照 DOUYIN_DIAG_TO=off 写，这个项目自己的电脑配置里写着）。
+     * DIAG_TO 是别的地址就传到那里（--diag：本机冒充的接收端）。比这个文件老的安装包里 config.js 可能没有 DIAG_TO，所以用 typeof。 */
     function endpoint() {
         var override = typeof DIAG_TO !== "undefined" ? DIAG_TO : "";
+        if (override === "off") { return ""; }
         if (override) { return override; }
-        var dev = typeof REPORT_TO !== "undefined" && !!REPORT_TO;
-        return dev ? "" : ENDPOINT;
+        var selftest = typeof SELFTEST !== "undefined" && !!SELFTEST;
+        return selftest ? "" : ENDPOINT;
     }
 
     /* ---------------- 什么能传出去 ---------------- */
