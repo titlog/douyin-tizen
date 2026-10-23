@@ -14,8 +14,8 @@
 var Update = (function () {
     "use strict";
 
-    /* Our own domain first: in mainland China raw.githubusercontent.com is
-     * DNS-poisoned and jsDelivr comes and goes. It relays GitHub (see
+    /* Our own domain first: on some networks raw.githubusercontent.com does
+     * not resolve and jsDelivr comes and goes. It relays GitHub (see
      * server/diag-worker.mjs in bilibili-tizen) and needs no trust — the
      * manifest is signed and names the bundle's sha256. */
     var MANIFESTS = [
