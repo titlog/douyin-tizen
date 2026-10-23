@@ -240,6 +240,38 @@
             }).then(function (adv) {
                 check("继续后在走", adv > 2, "3 秒前进 " + adv.toFixed(1) + "s");
             });
+        }).then(function () {
+            /* 暂停着跳到没缓冲的地方，再连按两下：play() 要等数据才落定，先被 pause() 打断，拒绝没人接就是「未处理的 Promise 异常」、
+             * 当出事上传（2026-10-23 一台电视快进着按暂停）。有数据时打断不了：这台电视上暂停着 play() 紧跟 pause()，play() 照样成功
+             * （第一版这一步就这么测的，对照答「成功」）。所以对照也在同一刻做：元素上 play() 紧跟 pause() 得是 AbortError，「不报错」才算数。 */
+            var rejected = [], control = "没落定", ready = -1;
+            function onRejection(e) { rejected.push(e.reason && e.reason.name ? e.reason.name : String(e.reason)); }
+            key(KEY.ENTER);
+            return wait(800).then(function () {
+                var s = st(), to = Math.max(s.t, s.buffered) + 12;
+                if (to > s.dur - 4) { return "这条剩下的都缓冲了（" + s.t.toFixed(0) + "/" + s.dur.toFixed(0) + "s），没处可跳"; }
+                Player.seek(to - s.t);
+                return wait(150).then(function () {
+                    window.addEventListener("unhandledrejection", onRejection);
+                    ready = st().readyState;
+                    key(KEY.ENTER);
+                    key(KEY.ENTER);
+                    var v = document.getElementById("va");
+                    var pr = v.play();
+                    v.pause();
+                    if (!pr || !pr.catch) { control = "play() 不返回 Promise"; }
+                    else { pr.catch(function (e) { control = e.name; return control; }).then(function (r) { if (r === undefined) { control = "成功"; } }); }
+                    return wait(1500);
+                }).then(function () { window.removeEventListener("unhandledrejection", onRejection); return ""; });
+            }).then(function (skip) {
+                check("跳到没缓冲的地方连按两下不报错", !skip && !rejected.length && st().paused && control === "AbortError",
+                      skip || "未处理的 Promise 异常 " + rejected.length + " 个" + (rejected.length ? "（" + rejected.join("、") + "）" : "") + "，暂停=" + st().paused +
+                      "，按的时候 readyState=" + ready + "，对照（元素上 play() 紧跟 pause()）：" + control);
+                key(KEY.ENTER);
+                return wait(1000).then(function () { return advance(3000); });
+            }).then(function (adv) {
+                check("再按一下接着走", adv > 2, "3 秒前进 " + adv.toFixed(1) + "s");
+            });
         }).then(ensureLong).then(function () {
             var a = st().t;
             key(KEY.FF);

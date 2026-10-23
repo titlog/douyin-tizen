@@ -487,7 +487,13 @@ var Player = (function () {
             if (!item) { return paused; }
             /* 等着进直播间：元素上还是点播那条，el.play() 会把它在封面底下接着放。只记下来，playFlv 照着办。 */
             if (pendingLive) { paused = !paused; return paused; }
-            if (el.paused) { el.play(); paused = false; } else { el.pause(); paused = true; }
+            /* play() 还没落定就被 pause() 抢先（再按一下、离开视频页、换下一条）是 AbortError，不是出了事；没人接它就是
+             * 「未处理的 Promise 异常」、当出事上传（2026-10-23 一台电视快进着按暂停，一上午传了三次）。别的拒绝说一句。 */
+            if (el.paused) {
+                var p = el.play();
+                if (p && p.catch) { p.catch(function (e) { if (e.name !== "AbortError") { Log.report("播放", "继续播放被拒 " + e.name + " " + e.message); } }); }
+                paused = false;
+            } else { el.pause(); paused = true; }
             return paused;
         },
         seek: function (delta) {

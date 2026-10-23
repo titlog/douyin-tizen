@@ -132,6 +132,29 @@ for (const f of ORDER) {
 }
 
 /* Every id the app reaches for must exist in the markup or be built by it. */
+/* Every play() hands back a promise that rejects when a pause(), a new src or a
+ * teardown gets there first. Unanswered, that is an 未处理的 Promise 异常 and an
+ * incident upload (2026-10-23: the pause toggle's play(), three uploads from one
+ * set in a morning of seeking). So each one is kept in a var and caught. */
+const loose = [];
+for (const f of ORDER) {
+  if (f.startsWith("vendor/")) { continue; }
+  const src = strip(fs.readFileSync(path.join(APP, f), "utf8"));
+  for (const m of src.matchAll(/\.play\(\)/g)) {
+    const lineStart = src.lastIndexOf("\n", m.index) + 1;
+    const kept = /var\s+([\w$]+)\s*=\s*[\w$.]+$/.exec(src.slice(lineStart, m.index));
+    const after = src.slice(m.index, m.index + 400);
+    if (/^\.play\(\)\s*\.catch\(/.test(after) || (kept && new RegExp("\\b" + kept[1] + "\\.catch\\(").test(after))) { continue; }
+    loose.push(f + ": " + src.slice(lineStart, src.indexOf("\n", m.index)).trim());
+  }
+}
+if (loose.length) {
+  console.log("✗ play() whose promise nobody catches:\n  " + loose.join("\n  "));
+  failed = true;
+} else {
+  console.log("✓ every play() is caught");
+}
+
 const html = fs.readFileSync(new URL("../app/index.html", import.meta.url).pathname, "utf8");
 const htmlIds = new Set([...html.matchAll(/id="([\w-]+)"/g)].map((m) => m[1]));
 const jsIds = new Set();

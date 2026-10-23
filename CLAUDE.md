@@ -160,7 +160,7 @@ app/
 ```bash
 node tools/collect.mjs | tee <日志文件>   # 终端 1
 zsh tools/deploy.sh                      # 终端 2；--spike 装可行性探测那个
-zsh tools/deploy.sh --selftest           # 自己派发按键把「刷」走一遍，逐步上报 PASS/FAIL（32 步，约 5 分钟）
+zsh tools/deploy.sh --selftest           # 自己派发按键把「刷」走一遍，逐步上报 PASS/FAIL（34 步，约 5 分钟）
 zsh tools/deploy.sh --livemse            # 直播：mpegts.js 放 FLV，每个直播间开始到动起来、之后 15 秒卡不卡（约 3 分钟）
 zsh tools/deploy.sh --splice             # 切换能不能不 seek：WebCodecs 软解第一帧、剪接、对照 seek（探测，见「上下滑还能多快」）
 zsh tools/deploy.sh --abseek             # 切换时 seek 在动画第 200 / 130ms 发，逐条轮换连刷 30 条，顺带看软解第一帧用上几次（约 4 分钟）
@@ -368,6 +368,12 @@ robots.txt 不会；框落到 robots.txt 就算登录完成。二维码图片搬
 两处补上：`tools/lint.mjs`（抄自 bilibili，抓「调用了不存在的东西」，`deploy.sh` 卡发布）；
 `log.js` 监听 `unhandledrejection`。**自测启动失败时会把播放器状态整个报上来**，这次就是靠
 `"id":"","sinceSwitch":巨大` 一眼看出「播放器根本没被调用」。
+
+**每个 `play()` 都要接住它的 Promise（`lint.mjs` 卡着，2026-10-23）。** 暂停键那个 `play()` 没接：快进到没缓冲的地方（`readyState=1`、
+在 seek）时 `play()` 要等数据才落定，这时再按暂停、离开视频页或换下一条，它就被 `pause()` 打断成 `AbortError`，没人接就是「未处理的
+Promise 异常」、当出事上传 —— 一台电视一上午传了三次，画面其实一秒后就接着走了。**有数据时打断不了**：这台电视上暂停着 `play()` 紧跟
+`pause()`，`play()` 照样成功，第一版自测就是这么测的，对照答「成功」，那一步什么都证明不了。现在自测先跳到缓冲外面再连按两下，同一刻在元素上
+`play()` 紧跟 `pause()` 做对照，对照得是 `AbortError` 才算数。
 
 > 统计日志时别用 BSD grep 的 `[^（ ]*` 这类带中文的字符类 —— 它把所有行都算成了「预热=无」，
 > 差点又当成一个 bug 去修。用 python 的 re。
