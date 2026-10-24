@@ -81,7 +81,7 @@ var Diag = (function () {
         [/([?&](?:a_bogus|X-Bogus|msToken|verifyFp|fp|webid|uifid|device_id|iid|ttwid|s_v_web_id|passport_csrf_token|sessionid|sid_tt|sid_guard|uid_tt|odin_tt|ticket|csrf_token)=)[^&\s"'<>]*/g, "$1…"],
         /* cookie 的值（名字留着：account 那行报「框里可见的 cookie」只报名字，判登录态要它）。 */
         [/\b(ttwid|s_v_web_id|sessionid|sessionid_ss|sid_tt|sid_guard|uid_tt|odin_tt|passport_csrf_token|passport_assist_user|msToken|UIFID|UIFID_TEMP|__ac_nonce|__ac_signature|bd_ticket_guard_client_data|_bd_ticket_crypt_cookie)=[^;&\s]+/g, "$1=…"],
-        /* 观众的 IP（10-24：bilibili 那边 #7 传上来的日志里有七处）：CDN 的 403 页（Client_ip）、报错里引的响应头
+        /* IP 地址：CDN 的 403 页（Client_ip）、报错里引的响应头
          * （x-debug-rmt-addr）、地址里的 oi=（整数形式）。别的点分四段也去掉，只留地址的主机（CDN 节点）和斜杠后面的版本号（Chrome/120.0.0.0）。 */
         [/((?:client[_-]?ip|x-debug-rmt-addr|x-forwarded-for|x-real-ip|remote[_-]?addr)["']?\s*[:=]\s*["']?)[^\s"'<>,;&]+/gi, "$1…"],
         [/(\boi ?[=:：] ?)\d+/g, "$1…"],
