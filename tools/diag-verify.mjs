@@ -134,6 +134,22 @@ await t("地址里的签名、设备指纹参数和 cookie 值抹掉，主机、
   assert.match(c, /ttwid=…; sessionid=…; s_v_web_id=…; passport_csrf_token=…/);
 });
 
+await t("观众的 IP 不出门：CDN 的 403 页、响应头、oi；CDN 节点的地址和版本号留着", () => {
+  const { Diag } = television();
+  /* 编的地址（文档用的那几段）。 */
+  const lines = [
+    "播放: 失败 data[2]=<p>Client_ip: 203.0.113.7</p> <p>Client_ip: 2001:db8::7</p> data[3]={\"x-debug-rmt-addr\":\"198.51.100.23\"}",
+    "播放: https://v3-web.douyinvod.com/abc/video/?oi=3405803777&l=1 你的地址 192.0.2.44",
+  ];
+  for (const l of lines) {
+    const s = Diag.scrub(l);
+    assert.doesNotMatch(s, /203\.0\.113\.7|2001:db8::7|198\.51\.100\.23|3405803777|192\.0\.2\.44/, s);
+  }
+  assert.match(Diag.scrub(lines[1]), /https:\/\/v3-web\.douyinvod\.com\/abc\/video\//);
+  assert.match(Diag.scrub("播放: https://192.0.2.80:4483/video 403"), /https:\/\/192\.0\.2\.80:4483/);
+  assert.match(Diag.scrub("engine: Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36"), /Chrome\/120\.0\.0\.0/);
+});
+
 await t("上传的整份内容里没有任何包起来的东西（原因也过一遍）", () => {
   const tv = television();
   tv.Diag.record("播放", "7562389017265114403 " + tv.Diag.priv("秘密文案") + " 放不了");
