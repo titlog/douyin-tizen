@@ -291,6 +291,99 @@ await t("服务器拒绝：写进状态，不当成功", () => {
   assert.match(tv.Diag.status().last.why, /HTTP 429 too many/);
 });
 
+/* 10-25：接收端答了八个小时的 404，那段时间的上传全丢了。没传上的现在下次启动后补传一次。 */
+const START = Date.UTC(2026, 9, 21, 4);
+const RING_KEY = "dy.diag.ring";
+function missedRing(line) {
+  return new Map([[RING_KEY, JSON.stringify(["10-25 03:00:00 player: 出事前的一行", "10-25 03:00:09 diag: " + line])]]);
+}
+
+await t("没传上的，下次启动一分钟后补传一次；传上了就不再补；紧跟着出的事不被它拦下", () => {
+  const storage = new Map();
+  const a = television({ storage });
+  a.responder.fn = () => [404, JSON.stringify({ error: "not found" })];
+  a.Diag.record("player", "出事前的一行");
+  a.Diag.incident("播放错误：A");
+  a.advance(a.Diag._test.SETTLE + 20000);
+  assert.equal(a.sent.length, 1);
+  assert.ok(a.reported.some((l) => l.includes("没传上：HTTP 404 not found")));
+  assert.equal(a.Diag.status().pending, true);
+  const b = television({ storage, start: START + 10 * 60000 });
+  const { RETRY_AFTER } = b.Diag._test;
+  b.advance(RETRY_AFTER - 1000);
+  assert.equal(b.sent.length, 0, "not before a minute in");
+  b.advance(2000);
+  assert.equal(b.sent.length, 1);
+  const body = lastBody(b);
+  assert.equal(body.reason, "补传：播放错误：A");
+  assert.equal(body.manual, false);
+  assert.ok(body.lines.some((l) => l.includes("出事前的一行")), "the missed upload's lines go with it");
+  assert.ok(b.reported.some((l) => l.includes("上次没传上（HTTP 404 not found），补传一次")));
+  assert.equal(b.Diag.status().pending, false);
+  b.Diag.incident("紧接着又出事");
+  b.advance(b.Diag._test.SETTLE);
+  assert.equal(b.sent.length, 2, "the retry does not hold back the next incident");
+  assert.equal(lastBody(b).reason, "紧接着又出事");
+  b.advance(20000);
+  const c = television({ storage, start: START + 20 * 60000 });
+  c.advance(5 * 60000);
+  assert.equal(c.sent.length, 0, "sent once is enough");
+});
+
+await t("补传认得旧版本写的那一行：http 兜底、原因里带括号、已经是补传的", () => {
+  const cases = [
+    ["没传上：连不上，走 http（https 连不上）（播放失败：拿不到地址（403））", "补传：播放失败：拿不到地址（403）"],
+    ["没传上：HTTP 404 not found，走 https（补传：js 报错）", "补传：js 报错"],
+    ["没传上：HTTP 429 too many from this device，走 https（在「我」里手动上传）", "补传：在「我」里手动上传"],
+  ];
+  for (const [line, reason] of cases) {
+    const tv = television({ storage: missedRing(line) });
+    tv.advance(tv.Diag._test.RETRY_AFTER + 1000);
+    assert.equal(tv.sent.length, 1, line);
+    assert.equal(lastBody(tv).reason, reason);
+  }
+});
+
+await t("不补传：接收端拒收的（400、413）、后来传上过的、关着的、自测构建", () => {
+  for (const line of ["没传上：HTTP 413 too large，走 https（播放错误）", "没传上：HTTP 400 bad shape，走 https（播放错误）"]) {
+    const tv = television({ storage: missedRing(line) });
+    tv.advance(5 * 60000);
+    assert.equal(tv.sent.length, 0, line);
+    assert.equal(tv.Diag.status().pending, false);
+  }
+  const later = missedRing("没传上：HTTP 404 not found，走 https（播放错误）");
+  const ring = JSON.parse(later.get(RING_KEY));
+  ring.push("10-25 03:10:00 diag: 传了 3 行，编号 abc23456，走 https（在「我」里手动上传）");
+  later.set(RING_KEY, JSON.stringify(ring));
+  const sentSince = television({ storage: later });
+  sentSince.advance(5 * 60000);
+  assert.equal(sentSince.sent.length, 0);
+  const offStorage = missedRing("没传上：连不上，走 http（https 连不上）（播放错误）");
+  offStorage.set("dy.diag.off", "1");
+  const off = television({ storage: offStorage });
+  off.advance(5 * 60000);
+  assert.equal(off.sent.length, 0);
+  const selftest = television({ storage: missedRing("没传上：连不上，走 http（https 连不上）（播放错误）"), diagTo: "", selftest: true });
+  selftest.advance(5 * 60000);
+  assert.equal(selftest.sent.length, 0);
+});
+
+await t("刚失败就重开：补传等到三分钟的间隔过了，不是被它拦下", () => {
+  const storage = new Map();
+  const a = television({ storage });
+  a.responder.fn = () => [0, ""];
+  a.Diag.incident("播放错误：B");
+  a.advance(a.Diag._test.SETTLE + 20000);
+  const b = television({ storage, start: START + 60000 });
+  const { AUTO_GAP, RETRY_AFTER } = b.Diag._test;
+  b.advance(RETRY_AFTER + 1000);
+  assert.equal(b.sent.length, 0, "still inside the gap");
+  b.advance(AUTO_GAP);
+  assert.equal(b.sent.length, 1);
+  assert.equal(lastBody(b).reason, "补传：播放错误：B");
+  assert.ok(!b.reported.some((l) => l.includes("没传（三分钟内")), "not held back: it waited");
+});
+
 await t("从源码装的和发布包一样传（diag.js 自己的 https 地址）；DIAG_TO=off、自测构建不传；DIAG_TO 给了地址就传那里", () => {
   const ENDPOINT = /var ENDPOINT = "([^"]*)";/.exec(SRC)[1];
   assert.match(ENDPOINT, /^https:\/\//);

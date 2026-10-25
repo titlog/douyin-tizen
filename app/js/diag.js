@@ -30,6 +30,7 @@ var Diag = (function () {
     var AUTO_PER_DAY = 12;      /* ……一天十二份：卡在循环里的电视不能变成水龙头 */
     var MANUAL_GAP = 10000;
     var PERSIST_EVERY = 15000;
+    var RETRY_AFTER = 60000;    /* 没传上的，下次启动这么久之后再传一次 */
 
     var OPEN = "\uE000", CLOSE = "\uE001";   /* 私用区的两个字符：日志里不会自然出现 */
 
@@ -186,7 +187,7 @@ var Diag = (function () {
     }
 
     /* reason：为什么传这一份，用观众看到的那句话。 */
-    function send(reason, manual, done) {
+    function send(reason, manual, done, retry) {
         done = done || function () {};
         /* 手动按的要在「我」那行字里有个回答，所以每一种结局 —— 包括这里就拒了的 —— 都记进 last。 */
         function refuse(why) {
@@ -202,7 +203,9 @@ var Diag = (function () {
             if (t - (s.manualAt || 0) < MANUAL_GAP) { refuse("刚传过，过几秒再按"); return; }
             s.manualAt = t;
         } else {
-            if (t - (s.at || 0) < AUTO_GAP) {
+            /* 补传（retryMissed）自己等过了三分钟，也不占这三分钟：紧跟着它出的事不能被拦下 —— 被拦下的不会再补
+             * （10-25 bilibili 那台电视上，补传后一秒造的那次出事就是这样没传）。一天的份数照算。 */
+            if (!retry && t - (s.at || 0) < AUTO_GAP) {
                 report("diag", "没传（三分钟内自动传过一份）：" + reason);
                 done({ ok: false, why: "三分钟内传过" });
                 return;
@@ -213,7 +216,7 @@ var Diag = (function () {
                 return;
             }
             s.n++;
-            s.at = t;
+            if (!retry) { s.at = t; }
         }
         put(K_SENT, JSON.stringify(s));
 
@@ -255,6 +258,31 @@ var Diag = (function () {
         }
     }
 
+    /* ---------------- 没传上的，补传一次 ----------------
+     *
+     * 以前上传失败就算了：那一圈里记一行「没传上」，再也不试。10-25 接收端答了八个小时的 404（域名被另一个 Worker 占了），
+     * 那段时间所有电视出的事全丢了。现在每次启动看一眼那一圈：最近的一行上传记录是「没传上」—— 这一版写的、更老的版本写的
+     * 都算，所以更新之前漏过的电视也会补 —— 就把那一圈再传一次，启动一分钟之后（不和第一个视频抢网）。没传上那次的内容
+     * 还在里面，除非之后又记了 600 行。接收端拒收的（400、413）不补，同样的内容再传还是被拒。补传又没传上，会再记一行
+     * 「没传上」，下次启动接着补；一天十二份的上限照样管着。 */
+    var MISSED = /diag: 没传上：(.*?)，走 https?(?:（[^（）]*）)?（([\s\S]*)）$/;
+    function missed() {
+        load();
+        for (var i = ring.length - 1; i >= 0; i--) {
+            if (/ diag: 传了 \d+ 行/.test(ring[i])) { return null; }
+            var m = MISSED.exec(ring[i]);
+            if (m) { return /^HTTP 4(?:00|13)\b/.test(m[1]) ? null : { why: m[1], reason: m[2].replace(/^补传：/, "") }; }
+        }
+        return null;
+    }
+    function retryMissed() {
+        if (!enabled() || !endpoint()) { return; }
+        var m = missed();
+        if (!m) { return; }
+        report("diag", "上次没传上（" + m.why + "），补传一次");
+        send("补传：" + m.reason, false, null, true);
+    }
+
     function incident(reason) {
         if (!enabled() || !endpoint()) { return; }
         reasons.push(String(reason || "?").slice(0, 120));
@@ -286,7 +314,11 @@ var Diag = (function () {
         /* app.js 的 window.onload 里调：日志通道，再记一行分界，留下来的那一圈看得出哪次启动从哪开始。 */
         init: function (opts) {
             if (opts && opts.report) { report = opts.report; }
-            if (enabled()) { push(stamp() + " diag: —— 新的一次启动 ——"); }
+            if (enabled()) {
+                push(stamp() + " diag: —— 新的一次启动 ——");
+                /* 也要过了三分钟的间隔，不然补传只会被它拦下。 */
+                setTimeout(retryMissed, Math.max(RETRY_AFTER, (sentState().at || 0) + AUTO_GAP - now()));
+            }
         },
         upload: function (done) { send("在「我」里手动上传", true, done); },
         enabled: enabled,
@@ -300,9 +332,10 @@ var Diag = (function () {
         },
         status: function () {
             return { enabled: enabled(), configured: !!endpoint(), device: shown(deviceId()),
-                     lines: (load(), ring.length), sending: sending || !!settleTimer, last: last };
+                     lines: (load(), ring.length), sending: sending || !!settleTimer, last: last,
+                     pending: !!missed() };
         },
         _test: { NET: NET, endpoint: endpoint, ring: function () { return ring.slice(); },
-                 SETTLE: SETTLE, AUTO_GAP: AUTO_GAP, AUTO_PER_DAY: AUTO_PER_DAY }
+                 SETTLE: SETTLE, AUTO_GAP: AUTO_GAP, AUTO_PER_DAY: AUTO_PER_DAY, RETRY_AFTER: RETRY_AFTER }
     };
 })();
