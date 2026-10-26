@@ -40,7 +40,7 @@ var Feed = (function () {
         try { localStorage.setItem(cacheKey(kind), JSON.stringify({at: Date.now(), items: list.slice(0, CACHE_MAX)})); } catch (e) {}
     }
 
-    /* 电视上看过的（2026-09-30 用户：推荐里同一条刷到三次）。原因是我们从来不告诉服务器看过什么 —— 官网一开始放就发
+    /* 电视上看过的（2026-09-30，推荐里同一条刷到过三次）。原因是我们从来不告诉服务器看过什么 —— 官网一开始放就发
      * aweme/stats（播放一次）和 history/write（观看历史，登录时），见 played()。服务器那边多久生效量不出来，所以本地也记一份：
      * 推荐 / 精选里再出现看过的直接跳过，feed 那行报「看过 N」—— 上报之后这个数降没降，就是服务器认没认的证据。
      * 作者主页、关注不过滤：在那里重看是有意的。localStorage 活得过重装（设备实测）。 */
