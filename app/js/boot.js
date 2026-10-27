@@ -22,7 +22,7 @@ var Boot = (function () {
     var SHELL = 1;
 
     /* 安装包的版本，给没有 tizen.application 的引擎（桌面浏览器）用。tools/update-verify.mjs 卡着它和 config.xml 一致。 */
-    var PACKAGED_FALLBACK = "1.4.4";
+    var PACKAGED_FALLBACK = "1.4.5";
 
     /* ECDSA P-256 公钥，SPKI，base64。tools/update-key.mjs 写进来；私钥永远不进仓库。 */
     var PUBKEY = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUKhacocdhSpkKUOasXjo74yi1X2jmdxHjSZfslCj59JzSqazwZqDIAdIv7knA16jhfcNi6Px/ylQ2Ylh20rN3g==";
