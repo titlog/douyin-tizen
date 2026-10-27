@@ -48,6 +48,10 @@ var Player = (function () {
     var STALL_MS = 12000, FIRST_CAP = 60000;
     var paused = false;
     var warm = {};             // item.id → {state: "在途"|"好了"|"失败", url, ms, bytes}
+    /* H.264 高度上限（feed.js 的 h264Cap）：这一条出画面时的播放头，走过 2 秒才算放成（-1 = 已经算过 / 还没出画面）。
+     * 不拿「到画面」当放成：10-27 那台 Tizen 6.5 上，竖屏片先报了到画面（播放头挪了一点），紧接着才解码失败。 */
+    var playedFrom = -1, tallOk = false;
+    var stFailTall = false;    // 自测 --tall：参考机解得了高的，假装解不了
 
     function isLive(g) { return g === gen; }
 
@@ -205,10 +209,12 @@ var Player = (function () {
             if (!mseE || marks.ready === undefined || el.currentTime < mseE.base - 0.5 || el.currentTime >= mseE.base + Mse.SLOT) { return; }
         }
         told = true;
+        playedFrom = rel();
         var detail = engine === "mse" ? "MSE 槽" + mseE.slot + "，seek 发出 " + marks.ready + " seeked " + (marks.seeked || "?") :
                      "元数据 " + (marks.loadedmetadata || "?") + " 首帧数据 " + (marks.loadeddata || "?") + " 可播 " + (marks.canplay || "?");
         var dims = engine === "mse" ? mseE.vw + "x" + mseE.vh : el.videoWidth + "x" + el.videoHeight;
-        Log.report("到画面", (Date.now() - switchAt) + "ms（" + detail + "）" + (playNote ? playNote + " " : "") + "预热=" + usedWarm +
+        var ratio = Feed.ratioOf(item);
+        Log.report("到画面", (Date.now() - switchAt) + "ms（" + detail + "）" + (playNote ? playNote + " " : "") + (ratio && ratio !== "1080p" ? "档=" + ratio + " " : "") + "预热=" + usedWarm +
                    (fellBack ? "（最终地址失败，退回跳转接口）" : "") + " " + dims + " | " + Diag.priv(item.author || "") + " " + Diag.priv(item.desc.slice(0, 16)));
         if (handlers.playing) { handlers.playing(item); }
         /* playing 不等于画面已经上屏：撤封面要等解码器真的在出帧。**requestVideoFrameCallback
@@ -236,36 +242,66 @@ var Player = (function () {
         el.addEventListener("ended", function () { if (item && (engine === "src" || engine === "flv") && !pendingLive && handlers.ended) { handlers.ended(); } });
         el.addEventListener("error", function () {
             if (!item || pendingLive) { return; }        // 拆除时空 src 的回声；等着进直播间时是点播管线的事
-            if (engine === "mse") { mseFatal("元素报错 " + (el.error ? el.error.code + " " + el.error.message : "?")); return; }
+            if (engine === "mse") { mseFatal("元素报错 " + (el.error ? el.error.code + " " + el.error.message : "?"), el.error ? el.error.code : 0); return; }
             /* 直播：元素的 src 是 mpegts 的 blob: 地址，不能走下面「最终地址失败、退回跳转接口」那条（会在 FLV 播放器还挂着时把 m3u8 塞给元素）。 */
             if (engine === "flv") { failFlv("元素报错 " + (el.error ? el.error.code + " " + el.error.message : "?")); return; }
             var code = el.error ? el.error.code : 0;
+            if (tallFailed(item, el.readyState >= 1 ? el.videoHeight : 0, code)) { fellBack = false; playNote += "·矮一档"; start(Feed.urlOf(item)); return; }
             /* 用的是预热拿到的最终地址、而且还没出过画面：可能是签名过期，退回跳转接口一次。 */
             if (!told && !fellBack && el.src.indexOf("/aweme/v1/play/") < 0) {
                 fellBack = true;
                 Log.report("播放", "最终地址失败 code=" + code + "，退回跳转接口 | " + Diag.priv(item.desc.slice(0, 16)));
-                start(item.url);
+                start(Feed.urlOf(item));
                 return;
             }
             if (handlers.error) { handlers.error("video error " + code); }
         });
         el.addEventListener("timeupdate", function () {
             if (item && handlers.progress) { handlers.progress(rel(), relDur()); }
+            if (item && playedFrom >= 0 && rel() - playedFrom >= 2) { playedFrom = -1; tallPlayed(); }
         });
     }
 
     /* MSE 管线坏了（SourceBuffer 报错、元素报错）：拆掉重建，从这一条的当前位置接着放。一次会话坏到
      * 第 3 次就整场改走 src —— 别让一个坏掉的管线每条都重建一遍。 */
-    function mseFatal(why) {
-        var it = item, t = told ? rel() : 0, note = playNote;
+    function mseFatal(why, code) {
+        var it = item, t = told ? rel() : 0, note = playNote, d = it && Mse.dimsOf(it);
         Mse.detach();
         mseE = null;
         engine = "";
         if (!it) { return; }
+        /* 原因知道了就不算管线坏：10-27 一条竖屏片三次报错，把整场会话赶去了 src。 */
+        if (d && /^avc/.test(d.codec) && tallFailed(it, d.h, code)) { play(it, note + "·矮一档", t); return; }
         mseFails++;
         if (mseFails >= 3) { mseOff = why; }
         Log.report("播放", "MSE 管线坏了（" + why + "），第 " + mseFails + " 次，" + (mseOff ? "这次会话改走 src" : "重建后接着放") + " | " + Diag.priv(it.desc.slice(0, 16)));
         play(it, note + "·重建", t);
+    }
+
+    /* 这一条的 H.264 流比这台电视的解码器高（元素报错 3 或 4）：学到上限（feed.js），以后的竖屏片要矮一档，这一条也用矮一档重放。
+     * h 是解出来的高；src 常常连元数据都没到就报错，那就按条目的宽高在 1080p 那档算。已经放成 2 秒的不算（那是别的毛病）。 */
+    function tallFailed(it, h, code) {
+        if (!it || it.live || (code !== 3 && code !== 4) || (told && playedFrom < 0)) { return false; }
+        if (/hev1|hvc1|hevc/i.test(Mse.whyBad(it))) { return false; }      // MSE 读过 moov，说它不是 H.264
+        if (!h && it.w && it.h) { var sh = Math.min(it.w, it.h); h = Math.round(it.h * Math.min(1080, sh) / sh); }
+        if (!Feed.h264Failed(h)) { return false; }
+        Log.report("播放", "这台电视的 H.264 解码器放不了 " + h + " 高的画面（元素报错 " + code + "）：以后竖屏片要 " + Feed.ratioOf(it) +
+                   "，这一条重放 | " + Diag.priv(it.desc.slice(0, 16)));
+        /* 预热拿到的是 1080p 那档的最终地址 */
+        for (var id in warm) {
+            if (warm.hasOwnProperty(id) && warm[id].blob) { try { URL.revokeObjectURL(warm[id].url); } catch (e) {} }
+        }
+        warm = {};
+        return true;
+    }
+    /* 这一条放成了（出画面后走了 2 秒）：高过 1088 的 H.264 放成过一次，这台电视就不用矮一档。 */
+    function tallPlayed() {
+        if (tallOk || !item || item.live || engine === "flv") { return; }
+        var d = engine === "mse" && mseE ? {h: mseE.vh, codec: mseE.vcodec || ""} : {h: el.videoHeight, codec: Mse.whyBad(item)};
+        if (/hev1|hvc1|hevc/i.test(d.codec) || !(d.h > 1088)) { return; }
+        tallOk = true;
+        if (Feed.h264Cap()) { Log.report("播放", "高 " + d.h + " 的 H.264 放成了：这台电视的上限作废"); }
+        Feed.h264Played(d.h);
     }
 
     function playSrc(it, startAt) {
@@ -289,7 +325,7 @@ var Player = (function () {
             start(w.url);
         } else {
             usedWarm = w ? (w.mode === "blob" ? "整段" : "开头") + "·" + w.state : "无";
-            start(it.url);
+            start(Feed.urlOf(it));
         }
     }
 
@@ -308,6 +344,9 @@ var Player = (function () {
             mseE = r.e;
             marks.ready = Date.now() - switchAt;
             place(r.e);
+            if (stFailTall && r.e.vh > 1088 && /^avc/.test(r.e.vcodec || "")) {
+                setTimeout(function () { if (g === gen) { mseFatal("自测假装元素报错 3", 3); } }, 300);
+            }
             /* playing 事件是主信号；万一没来（元素一直没停过），播放头在新槽里走起来也算。 */
             var tick = function () {
                 if (g !== gen || told) { return; }
@@ -340,6 +379,7 @@ var Player = (function () {
         switchAt = Date.now();
         marks = {};
         told = false;
+        playedFrom = -1;
         fellBack = false;
         paused = false;
         lastTime = -1;
@@ -397,6 +437,12 @@ var Player = (function () {
             wire();
             wireRest();
             Mse.init(video);
+            /* 尺寸问询（Tizen 的扩展写法，Shaka 在 Tizen 上就这么问）：能不能事先知道放不放得了高的，先攒证据 —— 现在只靠解码失败学（2026-10-27）。 */
+            try {
+                var ask = function (c, w, h) { return MediaSource.isTypeSupported("video/mp4; codecs=\"" + c + "\"; width=" + w + "; height=" + h) ? "是" : "否"; };
+                Log.report("解码", "H.264 上限 " + (Feed.h264Cap() || "无") + "；尺寸问询 avc1 1920x1080=" + ask("avc1.640028", 1920, 1080) + " 1080x1920=" +
+                           ask("avc1.640028", 1080, 1920) + " 540x960=" + ask("avc1.64001f", 540, 960) + "，hev1 1080x1920=" + ask("hev1.1.6.L120.90", 1080, 1920));
+            } catch (e) {}
             Mse.on("ended", function () { if (item && engine === "mse" && !pendingLive && handlers.ended) { handlers.ended(); } });
             Mse.on("error", function (why) { if (item && engine === "mse" && !pendingLive && handlers.error) { handlers.error(why); } });
             Mse.on("fatal", function (why) { if (engine === "mse" && !pendingLive) { mseFatal(why); } });
@@ -425,7 +471,7 @@ var Player = (function () {
             var w = warm[it.id] = {state: "在途", at: 0, mode: mode};
             var t0 = Date.now();
             var x = new XMLHttpRequest();
-            x.open("GET", it.url);
+            x.open("GET", Feed.urlOf(it));
             x.timeout = mode === "blob" ? 60000 : 15000;
             if (mode === "blob") {
                 x.responseType = "blob";
@@ -523,6 +569,8 @@ var Player = (function () {
         isPaused: function () { return paused; },
         /* 自测 --ab：预热的 moov 补取和不补取轮换。 */
         setMoovAB: function (on) { moovAB = !!on; },
+        /* 自测 --tall：高过 1088 的 H.264 一到画面就当它解码失败（配合 Feed.stTall("learn")）。 */
+        stFailTall: function (on) { stFailTall = !!on; if (on) { tallOk = false; } },
         /* 给自测读的快照，不改任何状态。 */
         /* 时间、时长、尺寸都是这一条自己的：MSE 下 currentTime 带槽的偏移，videoWidth/Height 停在第一条。 */
         state: function () {

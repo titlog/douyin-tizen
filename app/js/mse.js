@@ -144,9 +144,9 @@ var Mse = (function () {
                     ok({buf: x.response, url: x.responseURL, total: 0});
                     return;
                 }
-                if ((x.status === 403 || x.status === 404) && !retried && url !== e.item.url) {
+                if ((x.status === 403 || x.status === 404) && !retried && url !== e.src) {
                     R("CDN 地址 HTTP " + x.status + "，回跳转接口重新拿 | " + Diag.priv(e.item.desc.slice(0, 12)));
-                    get(e, e.item.url, from, to, true).then(function (r) { e.url = r.url; ok(r); }, fail);
+                    get(e, e.src, from, to, true).then(function (r) { e.url = r.url; ok(r); }, fail);
                     return;
                 }
                 fail(new Error(x.status === 206 ? "回来的字节对不上（" + (x.response ? x.response.byteLength : 0) + "B，" + (cr ? cr[0] : "无 Content-Range") + "）" : "HTTP " + x.status));
@@ -482,12 +482,12 @@ var Mse = (function () {
     function prepare(item, now) {
         var e = items[item.id];
         if (e) { e.usedAt = ++clock; return e.ready; }
-        e = items[item.id] = {id: item.id, item: item, slot: -1, base: 0, pending: 0, waiters: [], gen: 0, usedAt: ++clock, urgent: !!now,
+        e = items[item.id] = {id: item.id, item: item, src: Feed.urlOf(item), slot: -1, base: 0, pending: 0, waiters: [], gen: 0, usedAt: ++clock, urgent: !!now,
                               next: 0, size: 0, done: false, dead: false, xhr: null, t0: Date.now(), now: !!now,
                               segFrom: {}, gop: {video: [], audio: []}, replay: {video: null, audio: null}, replays: 0, replayBytes: 0};
         var head = now ? HEAD_NOW : HEAD;
         e.ready = open().then(function () {
-            return get(e, item.url, 0, FIRST - 1);
+            return get(e, e.src, 0, FIRST - 1);
         }).then(function (r) {
             e.firstGet = e.lastGet;
             e.url = r.url;
@@ -705,6 +705,8 @@ var Mse = (function () {
                    !(item.dur && item.dur > (SLOT - 60) * 1000);
         },
         whyBad: function (item) { return bad[item.id] || ""; },
+        /* 这一条的流多大、什么编码（moov 解析过才有）：{w, h, codec}，没有回 null。 */
+        dimsOf: function (item) { var e = items[item.id]; return e && e.vh ? {w: e.vw, h: e.vh, codec: e.vcodec || ""} : null; },
         attached: function () { return !!ms; },
         /* "槽里有" / "在途" / "" —— 「到画面」那行用。 */
         /* 这一条到现在收到的字节（播放器看门狗用：等数据的时候字节还在来就不算卡）。 */

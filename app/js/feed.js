@@ -138,10 +138,36 @@ var Feed = (function () {
         });
     }
 
-    function playUrl(uri) {
+    function playUrl(uri, ratio) {
         /* 列表里 play_addr.url_list 前两项是 douyinvod.com 直链，从哪儿问都 403；这个跳转
          * 接口不签名、不要 Referer 和 cookie，302 到 zjcdn 返回 206（2026-09-29 实测）。 */
-        return "https://www.douyin.com/aweme/v1/play/?video_id=" + encodeURIComponent(uri) + "&ratio=1080p&line=0";
+        return "https://www.douyin.com/aweme/v1/play/?video_id=" + encodeURIComponent(uri) + "&ratio=" + (ratio || "1080p") + "&line=0";
+    }
+
+    /* 这台电视的 H.264 解码器放得了多高的画面（2026-10-27）。一台 Tizen 6.5 的诊断日志：推荐里竖屏的 1080x1920 一条都没放出来
+     * （MSE 元素报错 3，换 src 还是 3 或 4），横屏的照常，同一台电视直播的 1080x1920（H.265）也照常；telegram 那边四台 Tizen 5.5 / 6.0
+     * 高于 1088 的 H.264 十四次全失败、不高于的十次全成。抖音的 ratio 按短边给档，竖屏要 540p 才是 540x960。
+     * 学法：H.264 流高于 1088、解码失败，而这台电视从没放成过那么高的 —— 记下上限，30 天后作废重测；放成过一次就不再学
+     * （参考机第一条竖屏就放成了）。有上限时竖屏片挑流不高于上限的最高一档。 */
+    var CAP_KEY = "dy.h264cap", TALL_OK_KEY = "dy.h264tall", CAP = 1088, CAP_DAYS = 30;
+    var capH = 0, tallOk = false, stSaved;
+    function loadCap() {
+        capH = 0;
+        try {
+            tallOk = localStorage.getItem(TALL_OK_KEY) === "1";
+            var c = JSON.parse(localStorage.getItem(CAP_KEY) || "null");
+            if (c && !tallOk && Date.now() - c.at < CAP_DAYS * 86400000) { capH = c.h; }
+            else if (c) { localStorage.removeItem(CAP_KEY); }
+        } catch (e) {}
+    }
+    loadCap();
+    var RATIOS = [1080, 720, 540, 360];
+    function ratioFor(it) {
+        if (!capH || !it.w || !it.h || it.h <= it.w) { return "1080p"; }
+        for (var i = 0; i < RATIOS.length; i++) {
+            if (Math.min(RATIOS[i], it.w) * it.h / it.w <= capH) { return RATIOS[i] + "p"; }   // 比源小的档给的是源本身
+        }
+        return "360p";
     }
 
     function first(list) { return list && list.url_list && list.url_list[0] || ""; }
@@ -479,6 +505,37 @@ var Feed = (function () {
         /* 接口原样的一条作品 → 内部条目（不能放的回 null）。README 截图脚本按视频 id 指定头图时用（spike/desktop-harness/readme-shots.mjs 的 HERO_FROM）。 */
         fromAweme: function (a) { return normalise(a, []); },
         watchedReport: watchedReport,
+        /* 放这一条用的地址：点播按这台电视的 H.264 上限挑档（条目里的 url 是 1080p 那档，缓存里的旧条目也一样）。 */
+        urlOf: function (it) { return it.live || !it.uri ? it.url : playUrl(it.uri, ratioFor(it)); },
+        ratioOf: function (it) { return it.live || !it.uri ? "" : ratioFor(it); },
+        h264Cap: function () { return capH; },
+        /* 一条 h 高的 H.264 流解码失败。这一下学到了上限就回 true（调用方用矮一档重放这一条）。 */
+        h264Failed: function (h) {
+            if (capH || tallOk || !(h > CAP)) { return false; }
+            capH = CAP;
+            try { localStorage.setItem(CAP_KEY, JSON.stringify({h: CAP, at: Date.now()})); } catch (e) {}
+            return true;
+        },
+        /* 一条 h 高的 H.264 流出画面了：这台电视放得了，上限作废、以后不再学。 */
+        h264Played: function (h) {
+            if (tallOk || !(h > CAP)) { return; }
+            tallOk = true;
+            capH = 0;
+            try { localStorage.setItem(TALL_OK_KEY, "1"); localStorage.removeItem(CAP_KEY); } catch (e) {}
+        },
+        /* 自测 --tall：参考机放得了高的，假装没放成过（"learn"，配合 Player 假装解不了），或者假装已经学到了（"cap"）；
+         * false 回到存着的状态（参考机存着「放成过」，测试里学到的上限随之作废）。 */
+        stTall: function (mode) {
+            try {
+                if (mode && stSaved === undefined) { stSaved = localStorage.getItem(CAP_KEY); }
+                if (!mode && stSaved !== undefined) {
+                    if (stSaved === null) { localStorage.removeItem(CAP_KEY); } else { localStorage.setItem(CAP_KEY, stSaved); }
+                    stSaved = undefined;
+                }
+            } catch (e) {}
+            if (mode) { tallOk = false; capH = mode === "cap" ? CAP : 0; return; }
+            loadCap();
+        },
         clearCache: function () {
             for (var k in KINDS) { if (KINDS.hasOwnProperty(k)) { try { localStorage.removeItem(cacheKey(k)); } catch (e) {} } }
         }

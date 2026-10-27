@@ -27,6 +27,7 @@ for a in "$@"; do
     --me) SELFTEST='"me"' ;;        # 「我」（观看历史 · 喜欢 · 收藏）、合集选集、评论侧栏；要已登录，只读（约 2 分钟）
     --mix) SELFTEST='"mix"' ;;      # 推荐里找一条带合集的，选集 → 接着放 → 下一集 → 返回两次；只读（约 1–3 分钟）
     --like) SELFTEST='"like"' ;;    # 点赞、收藏各一来一回。没有 ticket guard 头时 Act 不发；2026-10-18 不带头发过一次，服务器作废了登录
+    --tall) SELFTEST='"tall"' ;;    # 假装电视的 H.264 解不了高过 1088 的画面：竖屏片要学到上限、矮一档放起来（约 1 分钟）
     --diag) SELFTEST='"diag"' ;;    # 诊断日志：「我」里手动传一次、关掉再打开、造一次出事自动传（约 1 分钟）；
                                     # 传到 DOUYIN_DIAG_TO 给的地址，没给（或是 off）就传到这台电脑上的 node ../bilibili-tizen/tools/diag-local.mjs（先开着）
   esac

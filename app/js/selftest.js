@@ -1188,7 +1188,63 @@
         }, function (e) { Log.report("AB", "中止：" + e.message); });
     }
 
-    var MODES = {abseek: abSeek, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
+    /* --tall（2026-10-27）：Tizen 5.5–6.5 的 H.264 解码器放不了高过 1088 的画面，一台 Tizen 6.5 推荐里的竖屏片一条都没放出来。
+     * 参考机放得了，所以假装：从没放成过高的（Feed.stTall("learn")），高过 1088 的 H.264 一到画面就当它解码失败（Player.stFailTall）。
+     * 刷到竖屏片：要学到上限、同一条矮一档放起来；再刷到一条竖屏片：直接要矮一档、放得起来。跑完回到存着的状态。 */
+    function tallRun() {
+        Log.report("SELFTEST", "开始 --tall");
+        function nextPortrait(tries) {
+            var before = st().id;
+            key(KEY.DOWN);
+            return waitShown(before, 15000).then(function () {
+                var it = window.__app.current() || {};
+                if (!it.live && it.h > it.w) { return it; }
+                return tries > 1 ? nextPortrait(tries - 1) : null;
+            });
+        }
+        /* 这一条矮一档放起来了：出画面、流不高于 1088。 */
+        function waitLow(id, ms) {
+            var t0 = Date.now();
+            function poll() {
+                var s = st();
+                if (s.id === id && s.shown && s.vh > 0 && s.vh <= 1088) { return Promise.resolve(Date.now() - t0); }
+                if (Date.now() - t0 > ms) { return Promise.resolve(-1); }
+                return wait(200).then(poll);
+            }
+            return poll();
+        }
+        function portraitStep(name, wantLearnt) {
+            return nextPortrait(12).then(function (it) {
+                if (!it) { check(name, false, "往下刷了 12 条没碰到竖屏片"); return; }
+                return waitLow(it.id, 20000).then(function (ms) {
+                    return advance(3000).then(function (adv) {
+                        var s = st();
+                        check(name, ms >= 0 && adv > 2 && Feed.h264Cap() === 1088,
+                              "条目 " + it.w + "x" + it.h + "，档=" + Feed.ratioOf(it) + "，流 " + s.vw + "x" + s.vh + "（" + s.engine + "），等了 " + ms +
+                              "ms，3 秒前进 " + adv.toFixed(1) + "s，上限=" + (Feed.h264Cap() || "无") + (wantLearnt ? "" : "（这一条之前就学到了）"));
+                    });
+                });
+            });
+        }
+        return waitShown("", 40000).then(function (ms) {
+            if (ms < 0) { throw new Error("启动就没出画面"); }
+            Feed.stTall("learn");
+            Player.stFailTall(true);
+            return portraitStep("竖屏片解码失败 → 学到上限、这一条矮一档放起来", true);
+        }).then(function () {
+            return portraitStep("下一条竖屏片直接要矮一档", false);
+        }).then(function () {
+            Player.stFailTall(false);
+            Feed.stTall(false);
+            Log.report("SELFTEST", fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）");
+        }, function (e) {
+            Player.stFailTall(false);
+            Feed.stTall(false);
+            Log.report("SELFTEST", "中止：" + e.message + "（" + fails + "/" + steps + " 步失败）");
+        });
+    }
+
+    var MODES = {tall: tallRun, abseek: abSeek, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
     if (SELFTEST === "mse" || SELFTEST === "splice" || SELFTEST === "livemse") { return; }   // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();
