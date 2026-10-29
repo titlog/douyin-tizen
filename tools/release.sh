@@ -73,6 +73,7 @@ for f in app/js/*.js; do node --check "$f" >/dev/null || { echo "  syntax error 
 node "$ROOT/tools/lint.mjs" >/dev/null || { node "$ROOT/tools/lint.mjs" | grep '✗'; echo "  refuse to release"; exit 1; }
 node "$ROOT/tools/update-verify.mjs" >/dev/null || { node "$ROOT/tools/update-verify.mjs" | grep '✗'; echo "  refuse to release"; exit 1; }
 node "$ROOT/tools/diag-verify.mjs" >/dev/null || { node "$ROOT/tools/diag-verify.mjs" | grep '✗'; echo "  refuse to release"; exit 1; }
+node "$ROOT/tools/bridge-verify.mjs" >/dev/null 2>&1 || { node "$ROOT/tools/bridge-verify.mjs"; echo "  refuse to release"; exit 1; }
 
 echo "== signing profile =="
 if [ ! -f "$PW_FILE" ]; then

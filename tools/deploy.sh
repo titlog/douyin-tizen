@@ -61,6 +61,8 @@ if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/lint.mjs" >/dev/null || { no
 if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/update-verify.mjs" >/dev/null || { node "$ROOT/tools/update-verify.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
 # 诊断日志（2026-10-21）：去隐私、什么时候传、日志里没包起来的作者名和文案。
 if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/diag-verify.mjs" >/dev/null || { node "$ROOT/tools/diag-verify.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
+# 签名桥（2026-10-29）：重建时在途的请求当场拒掉、GET 再发；Argus 的 403 不算连续失败。
+if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/bridge-verify.mjs" >/dev/null 2>&1 || { node "$ROOT/tools/bridge-verify.mjs"; echo "  refuse to deploy"; exit 1; }; fi
 
 # 地址、自测开关、更新源只进包，不进仓库：打完包、或者中途任何一步退出，都改回去。
 restore_config() {

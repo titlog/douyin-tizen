@@ -49,6 +49,12 @@ var Bridge = (function () {
     var marks = {};           // 就绪那一行的分段用时
     var readyPromise = null;
     var failures = 0;
+    /* 在途的请求。重建签名桥时旧框被拿掉，框里还没回来的 XHR 一个回调都不来，只能等外面那 15 秒（2026-10-28 一台电视：作者资料
+     * 11 次里 8 次「超时」，每次都在重建之后正好 15 秒）。重建时当场拒掉，GET 在新框上再发一次 */
+    var inflight = [];
+    function drop(entry) { var i = inflight.indexOf(entry); if (i >= 0) { inflight.splice(i, 1); } }
+    /* Argus 的 403（「Blocked by ArgusSecurityPlugin …」）每次都一样：不是这一次被风控抽中，重试、重建签名桥都没用 —— 不计入连续失败 */
+    function argus(e) { return /ArgusSecurityPlugin/.test(String(e && e.message)); }
 
     function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
     function withTimeout(p, ms, what) {
@@ -207,17 +213,48 @@ var Bridge = (function () {
     function reset() {
         readyPromise = null;
         failures = 0;
+        var stale = inflight;
+        inflight = [];
+        if (stale.length) { Log.report("bridge", "重建时还有 " + stale.length + " 个请求在途，拒掉（GET 在新框上再发一次）"); }
+        stale.forEach(function (x) { var e = new Error("签名桥重建了"); e.rebuilt = true; x.bad(e); });
         return ready();
+    }
+
+    /* Argus 拦下时，签名 SDK 实际给这个请求加了哪些参数、框里 UIFID_TEMP 在不在、和加上的 uifid 是不是同一个（只说是不是，不报值）。
+     * 分得开「SDK 在这个引擎上没加 uifid」和「加了、服务器还是不认」：2026-10-28 一台 Tizen 5.0 上 UIFID_TEMP 就在 jar 里，
+     * 作者主页、选集照样 403 Uifid Not Found */
+    function signedWith(x) {
+        var added = [], uifid = null, cookie = null;
+        try {
+            (String(x.responseURL || "").split("?")[1] || "").split("&").forEach(function (kv) {
+                var k = decodeURIComponent(kv.split("=")[0]);
+                if (/^(a_bogus|X-Bogus|msToken|uifid|verifyFp|fp)$/.test(k)) {
+                    added.push(k);
+                    if (k === "uifid") { uifid = decodeURIComponent(kv.slice(k.length + 1)); }
+                }
+            });
+        } catch (e) {}
+        try {
+            frame.contentDocument.cookie.split(";").forEach(function (c) {
+                var p = c.trim().split("=");
+                if (p[0] === "UIFID_TEMP") { cookie = p.slice(1).join("="); }
+            });
+        } catch (e) {}
+        return "加上的参数[" + (added.join(",") || "无") + "] UIFID_TEMP " + (cookie === null ? "不在" : "在") +
+               (uifid !== null && cookie !== null ? "，和 uifid " + (uifid === cookie ? "一样" : "不一样") : "");
     }
 
     /* quiet：上报一类的请求（播放一次、观看历史）。aweme/stats 正常就回 200 + 空正文（2026-09-30，页面在 douyin.com 上、
      * cookie 齐全的测试台里也一样），空正文算成功；失败也不计入「连续 3 次失败就重建框」—— 为了一个上报拆掉签名桥不值。 */
-    function request(method, path, params, body, quiet) {
+    function request(method, path, params, body, quiet, again) {
+        var entry = null;
         return ready().then(function () {
             /* 外面再包一层 15 秒：2026-10-18 v1 的评论回复接口回 200 + 空正文 + bdturing-verify 头（人机验证），官网的验证 SDK
              * 收到它就把请求扣住、等验证码 —— 验证码弹在看不见的框里，onload、ontimeout、onerror 一个都不来，Promise 永远悬着
              * （电视上 --probe 和桌面测试台都是这样，见 comments.js）。悬着的请求在界面上就是「一直转圈」。 */
             return withTimeout(new Promise(function (ok, bad) {
+                entry = { bad: bad };
+                inflight.push(entry);
                 var win = frame.contentWindow;
                 var all = {};
                 var k;
@@ -230,7 +267,11 @@ var Bridge = (function () {
                 x.onload = function () {
                     var t = x.responseText || "";
                     /* 正文开头一起报：作品列表在签名不对时回 403「Blocked by ArgusSecurityPlugin Sign Invalid」。 */
-                    if (x.status !== 200) { bad(new Error("HTTP " + x.status + (t ? " " + t.slice(0, 50) : ""))); return; }
+                    if (x.status !== 200) {
+                        if (/ArgusSecurityPlugin/.test(t)) { Log.report("bridge", "被 Argus 拦下（" + path.replace(/^\/aweme\/v\d\/web\//, "") + "）：" + signedWith(x)); }
+                        bad(new Error("HTTP " + x.status + (t ? " " + t.slice(0, 50) : "")));
+                        return;
+                    }
                     /* 这两种都是 200：「blocked」是签名/环境没过，空正文是缺 cookie 一类 ——
                      * 桌面实测里这两个一直是分开的两种失败，分开报。 */
                     if (t === "blocked") { bad(new Error("blocked")); return; }
@@ -246,8 +287,14 @@ var Bridge = (function () {
                 var sent = Date.now();
                 x.send(method === "POST" ? (body || "") : null);
             }), 15000, path.replace(/^\/aweme\/v\d\/web\//, ""));
-        }).then(function (j) { if (!quiet) { failures = 0; } return j; }, function (e) {
-            if (quiet) { throw e; }
+        }).then(function (j) { drop(entry); if (!quiet) { failures = 0; } return j; }, function (e) {
+            drop(entry);
+            if (e.rebuilt) {
+                /* 写请求不重发：旧框里那一下可能已经到了服务器 */
+                if (method === "GET" && !again) { return request(method, path, params, body, quiet, true); }
+                throw e;
+            }
+            if (quiet || argus(e)) { throw e; }
             failures++;
             if (failures >= 3) {
                 Log.report("bridge", "连续 " + failures + " 次失败（最近：" + e.message + "），重建框和签名 SDK");

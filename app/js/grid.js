@@ -200,7 +200,11 @@ var Grid = (function () {
         var msg = "";
         if (!f) { msg = me.empty ? me.empty(key(me), null) : ""; }
         else if (me.loading) { msg = "正在加载…"; }
-        else if (me.err) { msg = (n ? "后面的加载失败（" + me.err + "），往下翻重试" : "加载失败（" + me.err + "），按确认键重试"); }
+        /* Argus 的 403 原文（「HTTP 403 Blocked by ArgusSecurityPlugin Uifid Not Found」）对观众没用：说是抖音那边没放行 */
+        else if (me.err) {
+            var why = /ArgusSecurityPlugin/.test(me.err) ? "抖音的安全检查没放行" : me.err;
+            msg = (n ? "后面的加载失败（" + why + "），往下翻重试" : "加载失败（" + why + "），按确认键重试");
+        }
         else if (full && me.tab < me.tabs.length - 1) { msg = "后面的集在顶上那一排的「" + me.tabs[me.tab + 1].name + "」"; }
         else if (!f.hasMore()) {
             if (!n) { msg = me.empty ? me.empty(key(me), f) : "这里是空的"; }
