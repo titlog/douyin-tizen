@@ -198,6 +198,12 @@ var Diag = (function () {
         var url = endpoint();
         if (!url) { refuse("这个版本没有接收地址"); return; }
         if (sending) { refuse("正在上传上一份"); return; }
+        /* 刚打开就按「上传」：关着的时候什么都不记，打开之后那一圈里只有「诊断日志=开」这一行。11-07…14 十份手动上传里
+         * 四份只有这一行，传上来什么也看不出。几乎是空的就不传，那行字说清楚为什么 */
+        if (manual) {
+            load();
+            if (ring.length < 5) { refuse("日志里还没什么东西（" + ring.length + " 行）：用一会儿、遇到问题之后再传"); return; }
+        }
         var t = now(), s = sentState();
         if (manual) {
             if (t - (s.manualAt || 0) < MANUAL_GAP) { refuse("刚传过，过几秒再按"); return; }

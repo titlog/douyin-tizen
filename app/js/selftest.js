@@ -500,7 +500,11 @@
         return waitShown("", 40000).then(function () {
             return until(function () { return Account.known(); }, 20000);     // 登录态查清楚之前「我」是转圈
         }).then(function () {
-            if (!wasOn) { Diag.setEnabled(true); }
+            if (!wasOn) {
+                Diag.setEnabled(true);
+                /* 刚打开的那一圈是空的，手动上传不到 5 行不传（diag.js）：先记几行 */
+                for (var i = 0; i < 5; i++) { Log.report("diag", "自测：刚打开，先记几行（" + (i + 1) + "/5）"); }
+            }
             logged = Account.loggedIn();
             viaTabs(KEY.RIGHT);                      // 推荐右边就是「我」
             return wait(2000);
