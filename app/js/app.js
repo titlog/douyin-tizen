@@ -1089,13 +1089,20 @@
             bootMarks.bridge = Date.now() - bootAt;
         }, function (e) {
             /* 第一次打开时框 15 秒没加载完就说「连不上抖音」、还当出事传一份 —— 2026-10-28 一台 Tizen 9 上推荐流自己重试，8 秒后就好了。
-             * 再等一次（推荐流的重试正在起的那一次会接上同一个），还不行才说 */
+             * 再等一次（推荐流的重试正在起的那一次会接上同一个），还不行才说。
+             * 11-14 又往后挪了一次：一台埃及的 Tizen 9 两次都是「脚本 webmssdk.es5.js 超时」、当出事传了，推荐流第三次 1.6 秒就起来、
+             * 视频照放（墨西哥一台也是两次超时就传了）。推荐流自己最多三轮，这里也等到第三次 */
             Log.report("bridge", "起不来：" + e.message + "，再等一次");
-            return Bridge.ready().then(function () {
-                bootMarks.bridge = Date.now() - bootAt;
-            }, function (e2) {
-                Log.report("bridge", "再等一次也起不来：" + e2.message);
-                trouble("连不上抖音：" + e2.message, 15000);
+            function up() { bootMarks.bridge = Date.now() - bootAt; }
+            return Bridge.ready().then(up, function (e2) {
+                Log.report("bridge", "再等一次也起不来：" + e2.message + "，等第三次");
+                return Bridge.ready().then(function () {
+                    up();
+                    Log.report("bridge", "第三次起来了");
+                }, function (e3) {
+                    Log.report("bridge", "第三次也起不来：" + e3.message);
+                    trouble("连不上抖音：" + e3.message, 15000);
+                });
             });
         }).then(function () {
             /* 桥失败时 check 也会把登录态标成「已知」，等它的标签不会一直等。 */

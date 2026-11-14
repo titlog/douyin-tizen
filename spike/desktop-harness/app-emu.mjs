@@ -28,8 +28,16 @@ page.on('response', async r => {
   const m = /UIFID_TEMP=([^;]+)/.exec(sc);
   if (m) await ctx.addCookies([{name: 'UIFID_TEMP', value: m[1], domain: 'www.douyin.com', path: '/', secure: true, sameSite: 'None'}]);
 });
+// 诊断日志的接收端一律拦掉：这里的 UA 是电视的，diag.js 当它是电视、出事就传 —— 10-22 传上去两条、11-14 又一条，
+// 在接收端看着像新电视（DIAG=1 才放行）。
+if (!process.env.DIAG) await page.route(/diag\.titdev\.nl/, r => r.abort());
 // HANG=<正则>：匹配的请求永远不回（模拟 CDN 连接吊住，看看门狗报不报；2026-10-22 直播 FLV 用过）。
-if (process.env.HANG) await page.route(new RegExp(process.env.HANG), () => {});
+// HANG_FIRST=n：只吊住前 n 个（11-14：签名桥前两次超时、第三次起来）。
+let hung = 0;
+if (process.env.HANG) await page.route(new RegExp(process.env.HANG), r => {
+  if (process.env.HANG_FIRST && hung >= +process.env.HANG_FIRST) return r.continue();
+  hung++;
+});
 // SELFTEST=author 之类：改写 config.js，桌面上先把自测本身走一遍（判据写错了在这里就能看出来）。
 if (process.env.SELFTEST) await page.route(/localhost:8766\/js\/config\.js/, async r => { const res = await r.fetch(); r.fulfill({response: res, body: (await res.text()).replace(/var SELFTEST = [^;]+;/, 'var SELFTEST = ' + process.env.SELFTEST + ';')}); });
 await page.goto(process.env.APP_URL || 'http://localhost:8766/index.html');
