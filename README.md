@@ -61,8 +61,10 @@
 | | |
 |---|---|
 | **实测可用** | 三星 2023 年款 65 吋 **CU7090**，固件 Tizen 9.0（Chromium 120） |
+| **用户在用** | Tizen 5.5、6.5、9.0、10.0：诊断日志里都有电视在正常刷 |
+| **最低要求** | Tizen 5.5（大致是 2020 年款起，1.4.9 起；之前是 6.0）。2019 年及更早的（Tizen 5.0 及以下）装不上：抖音自己的网页代码要在电视的浏览器里跑，那几代引擎太老 |
 | **较老的电视** | 已知 Tizen 6.0、6.5 的解码器解不了高度超过 1080 的 H.264，竖屏视频会自动换成 540p 放（1.4.5 起） |
-| **其他机型** | 没人试过。装成功或者失败，都欢迎开 issue 说一声机型和固件版本 |
+| **其他机型** | 装成功或者失败，都欢迎开 issue 说一声机型和固件版本 |
 
 ## 安装
 
@@ -165,7 +167,9 @@ Douyin's web API wants an `a_bogus` signature that only the site's own SDK, runn
 correctly. A Tizen web widget can script a `www.douyin.com` iframe, so the official SDK signs requests in a hidden
 frame. The details, measurements and pitfalls are in [`CLAUDE.md`](CLAUDE.md) (Chinese).
 
-Tested on a 2023 Samsung CU7090 (Tizen 9.0). On older sets (known: Tizen 6.0 and 6.5) the decoder can't handle H.264 taller
+Tested on a 2023 Samsung CU7090 (Tizen 9.0); the diagnostic logs show sets on Tizen 5.5, 6.5, 9.0 and 10.0 in use. It needs
+Tizen 5.5 or later (roughly 2020 models onwards; 6.0 before 1.4.9) — Douyin's own web code runs in the TV's browser, and older
+engines are too old for it. On older sets (known: Tizen 6.0 and 6.5) the decoder can't handle H.264 taller
 than 1080 pixels, so portrait videos switch to 540p automatically (from 1.4.5). The easy way to install: enable Developer Mode on the TV and power-cycle it,
 then open [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung) (desktop or Android), select the TV and install
 **Douyin (抖音)** from its app list (the community catalog); the first install asks you to sign in to a Samsung account

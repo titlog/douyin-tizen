@@ -7,7 +7,7 @@
 
     <tizen:application id="DouYinTv00.DouyinTv"
                        package="DouYinTv00"
-                       required_version="6.0"/>
+                       required_version="5.5"/>
 
     <!-- 和 bilibili 一样：这条访问策略在 Tizen 上取代浏览器的 CORS 模型。 -->
     <access origin="*" subdomains="true"/>
