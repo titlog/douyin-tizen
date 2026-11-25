@@ -28,6 +28,7 @@ for a in "$@"; do
     --mix) SELFTEST='"mix"' ;;      # 推荐里找一条带合集的，选集 → 接着放 → 下一集 → 返回两次；只读（约 1–3 分钟）
     --like) SELFTEST='"like"' ;;    # 点赞、收藏各一来一回。没有 ticket guard 头时 Act 不发；2026-10-18 不带头发过一次，服务器作废了登录
     --tall) SELFTEST='"tall"' ;;    # 假装电视的 H.264 解不了高过 1088 的画面：竖屏片要学到上限、矮一档放起来（约 1 分钟）
+    --livecodec) SELFTEST='"livecodec"' ;;  # 假装问询说高的 H.265 不行 / H.265 解码失败 / 什么都解不了：直播挑档、降档、最后停下来说解不了（4 步，约 2 分钟）
     --diag) SELFTEST='"diag"' ;;    # 诊断日志：「我」里手动传一次、关掉再打开、造一次出事自动传（约 1 分钟）；
                                     # 传到 DOUYIN_DIAG_TO 给的地址，没给（或是 off）就传到这台电脑上的 node ../bilibili-tizen/tools/diag-local.mjs（先开着）
   esac
@@ -63,6 +64,8 @@ if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/update-verify.mjs" >/dev/nul
 if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/diag-verify.mjs" >/dev/null || { node "$ROOT/tools/diag-verify.mjs" | grep '✗'; echo "  refuse to deploy"; exit 1; }; fi
 # 签名桥（2026-10-29）：重建时在途的请求当场拒掉、GET 再发；Argus 的 403 不算连续失败。
 if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/bridge-verify.mjs" >/dev/null 2>&1 || { node "$ROOT/tools/bridge-verify.mjs"; echo "  refuse to deploy"; exit 1; }; fi
+# 直播挑档（2026-11-25）：问询说解不了高的 H.265 时挑哪一档、解码失败降档、mpegts 自己回调里出错不当场拆。
+if [ "$APP" = "$ROOT/app" ]; then node "$ROOT/tools/live-verify.mjs" >/dev/null 2>&1 || { node "$ROOT/tools/live-verify.mjs" | grep '✗' -A3; echo "  refuse to deploy"; exit 1; }; fi
 
 # 地址、自测开关、更新源只进包，不进仓库：打完包、或者中途任何一步退出，都改回去。
 restore_config() {

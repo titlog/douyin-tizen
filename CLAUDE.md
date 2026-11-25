@@ -179,7 +179,9 @@ zsh tools/deploy.sh --like               # 点赞、收藏各一来一回 ——
 node tools/update-verify.mjs             # 自动更新离线验证（deploy、release 都卡着它）
 node tools/update-e2e.mjs                # 自动更新在桌面 Chrome 里带着 config.xml 的 CSP 走一遍（不碰抖音）
 zsh tools/deploy.sh --tall               # 假装电视的 H.264 解不了高过 1088 的画面：竖屏片学到上限、矮一档放起来（2 步，1 分钟），见「老电视的竖屏片」
-node tools/bridge-verify.mjs             # 签名桥离线验证：重建时在途的请求、Argus 的 403（deploy、release 都卡着它）
+zsh tools/deploy.sh --livecodec          # 假装问询说高的 H.265 不行 / H.265 解码失败 / 什么都解不了：直播挑档、降档、停下来说解不了（4 步，约 2 分钟），见「直播的 H.265」
+node tools/live-verify.mjs               # 直播挑档、降档、mpegts 出错时不当场拆的离线验证（deploy、release 都卡着它）
+node tools/bridge-verify.mjs             # 签名桥离线验证：重建时在途的请求、Argus 的 403、放行时加了哪些参数（deploy、release 都卡着它）
 zsh tools/deploy.sh --diag               # 诊断日志：「我」里手动传、关掉再开、造一次出事自动传（6 步，1 分钟）；先开 node ../bilibili-tizen/tools/diag-local.mjs
 node tools/diag-verify.mjs               # 诊断日志离线验证：去隐私、什么时候传、源码里没包起来的作者名和文案（deploy、release 都卡着它）
 node ../bilibili-tizen/tools/diag-logs.mjs --app douyin-tizen   # 读别人电视传上来的（--device 编号 / <id>）
@@ -303,6 +305,11 @@ robots.txt 不会；框落到 robots.txt 就算登录完成。二维码图片搬
 登录后新增的 cookie 是 `passport_assist_user`、`_bd_ticket_crypt_cookie`、`bd_ticket_guard_*`、
 `is_dbsc` 等；**同一个网站两台设备的 cookie 集合不一样，别再拿 cookie 名字当登录判据。**
 `account:` 那行现在同时报 history/read、notice/count 和 cookie 名字，**这一行别删**。
+
+**二维码页停在哪一步（2026-11-25，诊断日志）**：一台 Tizen 5.5 二十分钟换了七张码也没登上，日志里只有七次「二维码到了」和一串
+「整页文字：…」（原文是私人的，上传时成了「…」）—— 分不出是没人扫、扫了没确认、确认后卡在「正在登录」，还是要验证。现在 `login.js`
+在页面文字变了时报类别和长度（`类别 已扫码·确认·登录中·过期·验证·风控 / 其他，N 字`；「验证码登录」「获取验证码」先拿掉再判「验证」），
+二维码往上四层那块单独一行（带上我们给观众的提示），框换了地址报一行（只到路径）。**不报原文**。
 
 > **别在用户自己登录着的浏览器里密集调接口做实验。** 2026-09-29 晚上在用户的 Chrome 里
 > 连着问了十几个接口（部分不带官网会带的签名头），那个会话被推进了滑块验证码，之后
@@ -455,6 +462,14 @@ seek 到槽起点；正在放的那条边放边续取（保持前方 30 秒）�
 avc1/mp4a、缺轨、moov 不在开头、比槽长）换 src；管线一次会话坏 3 次，整场改走 src。换 src 时按键到出画面
 1.2–1.6 秒，MSE 下切到预热好的槽 0.2–0.5 秒（自测每 200ms 看一次，数字偏粗）。
 
+**MediaSource 没打开就换一个新的重开（2026-11-25，诊断日志）。** 一台 Tizen 9 启动后第一条「MediaSource 5 秒没打开」，之后每一条都在
+一秒内报同样的错，「按下键重试」也是，直到重开应用：`open()` 把那个失败的 Promise 缓存着，只有 `detach` 才清。现在超时就作废（下一次
+`prepare` 新建一个 MediaSource、重设 src）。**为什么没打开还不知道**：超时那行（`mse: MediaSource 第 N 次 5 秒没打开：页面 visible/hidden、
+MediaSource 状态、元素 readyState / networkState / error、src 还是不是它、页面开了几秒`）和晚到的 sourceopen（`打开用了 Nms（已经当失败了）`）
+留给下一份日志判。
+**MSE 取数据 HTTP 失败那行带上是谁回的**：`HTTP 503（www.douyin.com 跳转接口没跳走 text/html 1234B）` / `HTTP 404（某台 CDN 主机 …）`。
+一台新装的 Tizen 8 每条视频一秒内 503 / 404（2026-11-24），原来那行只有状态码，分不出是跳转接口自己回的还是 CDN。
+
 **几条的数据交错着 append，回到某一条要把它最后一个 GOP 重放一遍。** 第一版自测「连按三下」挂了：第三条
 放到 3.35 秒停住 4.4 秒，前方缓冲 0，队列里还积着 30 段、已经取了 36MB。
 - 原因：两条之间时间戳一跳，SourceBuffer 按规范当成不连续，丢帧丢到下一个关键帧为止。mp4box 0.5.4
@@ -541,6 +556,12 @@ TA 的最后一个作品自己放完就停住（不停的话 MSE 播放头停在
   现在被 Argus 拦下时记一行 `被 Argus 拦下（…）：加上的参数[a_bogus,msToken,…] UIFID_TEMP 在，和 uifid 一样/不一样`（只说是不是，
   不报值），下一份这样的日志就分得开。Argus 的 403 每次都一样，**不计入「连续 3 次失败就重建签名桥」**（那台电视上它把桥重建了一遍
   又一遍）；屏幕上说「抖音的安全检查没放行」，不放原文。
+  **那一行答了一半（2026-11-18/19，1.4.9 的诊断日志）**：两台没登录的 Tizen 5.5（Chromium 69）作者主页次次 403 `Uifid Not Found`，
+  `加上的参数[verifyFp,fp,a_bogus]` / `[verifyFp,fp,msToken,a_bogus]`、`UIFID_TEMP 在` —— **签名 SDK 在这个引擎上没往请求里加 `uifid`**，
+  cookie 是在的。同一段时间一台没登录的 Tizen 6.0（Chromium 76）作品列表拿到了 18 条；参考机（Tizen 9）09-29 的探测里第二次请求就加上了
+  `uifid`。6.0 那次加没加、加了什么不知道 —— 所以现在**放行了也报一次**：`bridge: 放行了（aweme/post/）：加上的参数[…] UIFID_TEMP 在 …`
+  （作品列表、选集、推荐流，每个接口每次运行一次，不报值；`bridge-verify` 卡着）。下一份 5.5 / 6.0 的日志放在一起比，才知道 SDK 是看引擎版本、
+  还是看别的条件决定加不加 uifid。**没修**：自己往请求里补 uifid 是猜（签名之后再改参数会怎样，没测过）。
 - **重建签名桥时还没回来的请求**：旧框被拿掉，框里的 XHR 一个回调都不来，只能等外面那 15 秒 —— 同一台电视上作者资料 11 次里
   8 次「超时」，每次都在重建之后正好 15 秒。现在重建时当场拒掉，GET 在新框上再发一次，写请求不重发（旧框里那一下可能已经到了服务器）。
   `node tools/bridge-verify.mjs`（假框，deploy、release 卡着）测这两件，改之前的代码在第一项上就是那个 15 秒超时。
@@ -744,7 +765,7 @@ Playwright 的 Chrome 关掉跨域检查，按 `STEPS` 派发按键、截图；`
 | 参数 | **要照抄官网那一次的值**（`action=load_more`、`is_ssr=true`、`enter_source=web_homepage_hot_web_live_card`……，见 feed.js 的 `LIVE_Q`）。不照抄：签名对、200、`status_code=0`、data 是空的 `{}` —— 一开始以为是页面地址的事，逐项加 cookie 都没用，换成官网的参数值第一步就有了 |
 | 翻页 | 上一页 `extra.max_time` 当 `maxtime`；每页约一半重复，按房间号去重 |
 | 拉流 | 房间里直接有 `flv_pull_url`、`hls_pull_url_map` 各四档（蓝光 1088p…标清），**不签名、不认 Referer、不要 cookie**（curl 直接取到）；每个地址带自己的 `sign`，FLV 不能从 HLS 地址改出来（403） |
-| 编码 | **几乎全是 H.265**（`live_core_sdk_data` 里各档 VCodec，只有 240p 那档是 H.264；不声明 HEVC 也一样）。HLS 是 TS 分片 ~3.7 秒，音频 AAC-LC |
+| 编码 | **几乎全是 H.265**（`live_core_sdk_data` 里各档 VCodec，只有 md 那档（360p / 240p）是 H.264，见下面「直播的 H.265」；不声明 HEVC 也一样）。HLS 是 TS 分片 ~3.7 秒，音频 AAC-LC |
 | `<video>` 直接放 m3u8 | 电视：HEVC 解得出，但 playing 之后**播放头停在 0 不动 5–10 秒**（缓冲里已经 12 秒、readyState=4），8 个直播间 3 个被看门狗跳掉；`seekable` 是空的，往回退做不了（`--live` 量的，那个探测和往回退的代码后来删了）。平台播放器要先攒一大截，`<video>` 没开关。现在只在直播间没有 FLV 地址时退回它 |
 | `<video>` 直接放 FLV | 电视：8 秒没动 |
 | AVPlay | bilibili 用它 + `setBufferingParam` 压到 ~1 秒，但**我们的 CSP 有 `object-src 'none'`，它的 `<object>` 会被拦，而 CSP 跟安装包走、不跟自动更新走** —— 已经装着的电视都用不了，没试 |
@@ -758,10 +779,59 @@ Playwright 的 Chrome 关掉跨域检查，按 `STEPS` 派发按键、截图；`
   直播间头上。`Player.stop()` 对直播是真停（暂停了 FLV 也一直在下）。
 - 看门狗看「字节还在不在来」只认 mpegts 统计信息里 `speed > 0`：统计信息是定时器每 600ms 发的、不管有没有字节，只数事件的话 CDN 连接
   吊住时永远不报（桌面测试台把 FLV 请求吊住：现在 14 秒报卡住、跳下一个）。一个直播间只报一次错（`failFlv`），主播下播（`ended`）就换下一个。
+  **`failFlv` 不在 mpegts 自己的回调里当场拆它**，拆和往下走放到下一轮（见「直播的 H.265」最后两段）。
 - 离开直播超过 10 分钟再回来换一批直播间（那一批多半下播了）。直播间不当观看历史的「上一条」（编号是 room…，不是作品 id）。
 - 界面：头像套红圈、「直播」标签，左下第三行「● 直播中 · N 人在看」，赞评论收藏分享不显示；暂停时下键只有头像（进主播主页），评论 /
   弹幕没接（要另接 WebSocket）；不能快进快退；暂停超过 20 秒再继续就重新连（照 bilibili）。观看不上报（`Feed.played` 跳过直播间）。
 - 设备自测 30 步全过（「直播」能播：出画面 1.4 秒、之后 6 秒不停；换直播间 1.7 秒不停）。
+
+## 直播的 H.265：一类 Tizen 5.5 解不了（2026-11-25，诊断日志）
+
+1.4.9 之后 21 台电视的启动行里，4 台答 `hev1 1080x1920=否`，全是 Tizen 5.5（Chromium 69）；这 4 台**每个直播间都放不了**：
+`到画面 … 1080x1920`（720x1280 也一样），一秒内 `直播: 放不了：元素报错 3` 或 `mpegts MediaError MediaMSEError … appendBuffer … error attribute is not null`。
+答「是」的 Tizen 5.5 竖屏直播照常。分不开的两种：H.265 根本解不了，还是高过 1088 的才解不了（720x1280 也高过 1088；点播 H.264 就是卡在
+1088，见「老电视的竖屏片」）。**都还没有直接证据**，下面的改法两种都接得住，并且日志会说是哪一种。
+
+**直播间给了哪几档**（开发机上匿名问了一次官网直播首页，20 个直播间；字段见 feed.js 的 `liveStreams`）：
+
+| 档 | 编码 | 竖屏尺寸 | flv_pull_url 里 |
+|---|---|---|---|
+| origin（有的另有 uhd） | H.265（20 个里 1 个是 H.264） | 1080x1920 / 1088x1920 / 720x1280，帧率到 59 | FULL_HD1（现在默认放的） |
+| hd | H.265 | 720x1280 | HD1 |
+| sd | H.265 | 540x960 | SD2 |
+| ld | H.265 | 480x853 | SD1 |
+| **md** | **H.264** | 360x640 或 240x4xx，15fps | **没有**，只在 `stream_data` 里，FLV 在 https 的另一台主机上 |
+
+各取了一段开头确认过：md 的视频是 AVC，sd 的是 HEVC；和别的档一样不要 Referer、cookie。
+
+**改法**（player.js 的 `pickLive`）：
+- **只有启动问询答 hev1 1080x1920=否的电视才挑档**；答「是」的照旧放 flv 那一档。一台 Tizen 6.0 上两个直播间次次元素报错 3、别的照常 ——
+  原因不知道，不拿它学。
+- 挑问询说解得了的最大一档：H.265 按它自己的尺寸问（`isTypeSupported('…; width=…; height=…')`），H.264 不高于 1088 的都算（高过的要这台
+  电视放成过竖屏 H.264）。日志 `直播: 挑档 sd H.265 540x960 30fps（跳过 origin、hd）`。
+- 挑的那档还没放成 2 秒就解码失败 → **同一个直播间换下一档**：失败的是不高于 1088 的 H.265 → 这次运行不再挑 H.265；高的 → 只挑比它矮的。
+  一档都没有了 → `直播：解不了`。放成 2 秒的报 `直播: 放成了 …`（每种编码 + 尺寸一次）。**下一份日志读这几行**：sd 放成了 = 只是高的不行；
+  `解不了 sd …`、md 放成了 = H.265 不行。
+- 「到画面」「放不了」两行对直播带上 `· 流 origin H.265 1080x1920 59fps，解出 hvc1.… 1080x1920 30fps`（后半是 mpegts 的 MEDIA_INFO）。
+  启动那行多问了 hev1 720x1280 / 540x960 / 1920x1080 / 不带尺寸、hvc1 1080x1920。
+- md 是 360x640、15fps，65 吋上糊，但比一个直播间都放不了强。
+- **这条路在参考机上走不到**（它答「是」、什么都解得了）：`zsh tools/deploy.sh --livecodec` 假装着走 4 步（问询说高的不行 → 挑一档不高于
+  1088 的真放起来；H.265 假装解码失败 → 同一个直播间降到 H.264；下一个直播间直接 H.264；什么都失败 → 停下来说解不了）；
+  `node tools/live-verify.mjs`（deploy、release 卡着）在设备之外测挑档、降档。**两个都还没在电视上跑过。**
+
+**连着失败要数得到 5**（app.js）：`errorsInRow` 原来在 playing 就清零，这几台的直播间都是先出画面再报错，计数永远到不了 5，直播页每两秒
+自己换一个台、没完没了，屏幕上只有「这条放不了」。现在**出画面后播放头走过 2 秒才清零**；连着五个都是直播解码失败（元素报错 3 / 4、
+mpegts MediaError、解不了）时说「这台电视解不了这些直播的画面，换个标签看看吧」，不说「可能是网络问题」。
+
+**mpegts 出错时不当场拆它**：三台 Tizen 5.5 传上来「未处理的 Promise 异常：Cannot read property 'notifyBufferedPositionChanged' / 'emit' of null」。
+MediaMSEError 是 mpegts 在 appendMediaSegment 里同步发出来的，`failFlv` 当场 destroy，回到它那个回调的下一句 `_loading_controller` 已经是 null；
+转封装器 `Promise.resolve().then` 排着的回调再碰已经拆掉的 `_emitter`。观众看不见，每次都当出事上传。现在 `failFlv` 记一行，拆和往下走都放到
+下一轮（`setTimeout 0`，排着的 Promise 回调先跑完）。`live-verify` 拿改之前的 player.js 跑，这一项当场红。
+
+**看了很久直播之后点播解不了**（2026-11-20，一个样本，1.4.6）：一台 Tizen 6.5 在一个直播间待了 42 分钟，回到点播：MSE 三次元素报错 3
+（消息是空的）、改走 src 也是 3，连着五条；再进直播又放得了。同一天早些时候它放成过竖屏 H.264，不是 1088 那件事。**没改行为**，只让下一份
+日志分得开：「MSE 管线坏了」那行带上编码和尺寸，src 出错新加一行（元素的 code + message、走的跳转接口还是 CDN、出没出过画面），两行都带
+「N 秒前离开直播（在那个直播间待了 M 秒）」；离开直播（包括去「我」、网格页）都报「离开」那行。
 
 ## 上下滑还能多快（2026-10-22：切换时先停在一张图上、再突然开始播，要直接就动起来）
 

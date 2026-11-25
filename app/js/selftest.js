@@ -1248,7 +1248,87 @@
         });
     }
 
-    var MODES = {tall: tallRun, abseek: abSeek, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
+    /* --livecodec（2026-11-25）：一类 Tizen 5.5 的问询答 hev1 1080x1920=否，每个直播间都是出画面一秒内解码失败、直播页每两秒自己换一个台。
+     * 参考机什么都解得了，所以假装（Player.stLive）：
+     *   1. "narrow"：问询说高过 1088 的 H.265 不行 → 直播挑一档不高于 1088 的、真放起来（顺带验证 stream_data 里那几档的地址 mpegts 放得了）；
+     *   2. "nohevc"：H.265 一出画面就假装解码失败 → 这个直播间降到 H.264 那档放起来；
+     *   3. 下一个直播间直接挑 H.264，不再先试 H.265；
+     *   4. "none"：什么都假装失败 → 停下来、屏幕上说这台电视解不了，不再没完没了地自己换台。 */
+    function liveCodecRun() {
+        Log.report("SELFTEST", "开始 --livecodec");
+        function lv() { return st().live || {}; }
+        function desc(l) { return l.q ? l.q + " " + l.codec + " " + l.w + "x" + l.h + (l.picked ? "（挑的）" : "（默认那档）") + "，这个直播间降了 " + l.steps + " 档" : "没有档"; }
+        /* 等一个直播间出画面、而且放的那一档满足 pred。 */
+        function waitLive(pred, ms) {
+            var t0 = Date.now();
+            function poll() {
+                var s = st(), it = window.__app.current() || {};
+                if (it.live && s.shown && s.id === it.id && pred(s.live || {}, s)) { return Promise.resolve(Date.now() - t0); }
+                if (Date.now() - t0 > ms) { return Promise.resolve(-1); }
+                return wait(200).then(poll);
+            }
+            return poll();
+        }
+        /* 下键换台，直到放起来的那一档满足 ok（最多 tries 个直播间）。回 {ms, l, adv}。 */
+        function nextRoom(ok, tries) {
+            var before = st().id;
+            key(KEY.DOWN);
+            return waitLive(function (l, s) { return s.id !== before && l.picked && (l.codec !== "h265" || !/^(nohevc|none)$/.test(mode)); }, 25000).then(function (ms) {
+                return advance(3000).then(function (adv) {
+                    var r = {ms: ms, l: lv(), adv: adv};
+                    if (ms >= 0 && !ok(r.l) && tries > 1) { return nextRoom(ok, tries - 1); }
+                    return r;
+                });
+            });
+        }
+        var mode = "";
+        function setMode(m) { mode = m; Player.stLive(m); }
+        function done(msg) {
+            Player.stLive("");
+            Log.report("SELFTEST", msg || (fails ? "结束，" + fails + "/" + steps + " 步失败" : "结束，全部通过（" + steps + " 步）"));
+        }
+        return waitShown("", 40000).then(function (ms) {
+            if (ms < 0) { throw new Error("启动就没出画面"); }
+            setMode("narrow");
+            viaTabs(KEY.LEFT, 3);                  // 推荐 → 关注 → 精选 → 直播
+            return waitLive(function (l) { return l.picked; }, 30000);
+        }).then(function (ms) {
+            return advance(3000).then(function (adv) {
+                var l = lv();
+                check("问询说高的 H.265 不行 → 直播挑一档不高于 1088 的放起来", window.__app.tab() === "live" && ms >= 0 && l.h > 0 && l.h <= 1088 && adv > 2,
+                      "等了 " + ms + "ms，" + desc(l) + "，3 秒前进 " + adv.toFixed(1) + "s");
+            });
+        }).then(function () {
+            setMode("nohevc");
+            /* 第一档就是 H.264 的直播间（原画是 H.264 的）走不到降档，换下一个 */
+            return nextRoom(function (l) { return l.steps >= 1; }, 5).then(function (r) {
+                check("H.265 解码失败 → 这个直播间降到 H.264 放起来", r.ms >= 0 && r.l.codec === "h264" && r.l.steps >= 1 && r.adv > 2,
+                      "等了 " + r.ms + "ms，" + desc(r.l) + "，3 秒前进 " + r.adv.toFixed(1) + "s");
+            });
+        }).then(function () {
+            return nextRoom(function () { return true; }, 1).then(function (r) {
+                check("下一个直播间直接挑 H.264", r.ms >= 0 && r.l.codec === "h264" && r.l.steps === 0 && r.adv > 2,
+                      "等了 " + r.ms + "ms，" + desc(r.l) + "，3 秒前进 " + r.adv.toFixed(1) + "s");
+            });
+        }).then(function () {
+            setMode("none");
+            key(KEY.DOWN);
+            var t0 = Date.now(), toast = document.getElementById("toast");
+            function stopped() {
+                if (/解不了这些直播/.test(toast.textContent) && toast.className === "show" && !st().id) { return Promise.resolve(Date.now() - t0); }
+                if (Date.now() - t0 > 60000) { return Promise.resolve(-1); }
+                return wait(250).then(stopped);
+            }
+            return stopped().then(function (ms) {
+                return wait(4000).then(function () {
+                    check("什么都解不了 → 停下来说这台电视解不了，不再自己换台", ms >= 0 && !st().id,
+                          "等了 " + ms + "ms，提示「" + toast.textContent + "」，之后 4 秒播放器" + (st().id ? "又在放 " + st().id : "停着"));
+                });
+            });
+        }).then(function () { done(); }, function (e) { done("中止：" + e.message + "（" + fails + "/" + steps + " 步失败）"); });
+    }
+
+    var MODES = {livecodec: liveCodecRun, tall: tallRun, abseek: abSeek, soak: soak, qr: qrOnly, diag: diagRun, ab: ab, seek: seekRun, author: authorOnly, grid: gridRun, cold: coldRun, probe: probeRun, me: meRun, mix: mixRun, like: likeRun};
     if (SELFTEST === "mse" || SELFTEST === "splice" || SELFTEST === "livemse") { return; }   // js/msespike.js 自己跑
     window.addEventListener("load", function () { setTimeout(MODES[SELFTEST] || run, 500); });
 })();

@@ -74,6 +74,7 @@ node "$ROOT/tools/lint.mjs" >/dev/null || { node "$ROOT/tools/lint.mjs" | grep '
 node "$ROOT/tools/update-verify.mjs" >/dev/null || { node "$ROOT/tools/update-verify.mjs" | grep '✗'; echo "  refuse to release"; exit 1; }
 node "$ROOT/tools/diag-verify.mjs" >/dev/null || { node "$ROOT/tools/diag-verify.mjs" | grep '✗'; echo "  refuse to release"; exit 1; }
 node "$ROOT/tools/bridge-verify.mjs" >/dev/null 2>&1 || { node "$ROOT/tools/bridge-verify.mjs"; echo "  refuse to release"; exit 1; }
+node "$ROOT/tools/live-verify.mjs" >/dev/null 2>&1 || { node "$ROOT/tools/live-verify.mjs" | grep '✗' -A3; echo "  refuse to release"; exit 1; }
 
 echo "== signing profile =="
 if [ ! -f "$PW_FILE" ]; then

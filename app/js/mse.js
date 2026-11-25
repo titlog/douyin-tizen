@@ -145,11 +145,12 @@ var Mse = (function () {
                     return;
                 }
                 if ((x.status === 403 || x.status === 404) && !retried && url !== e.src) {
-                    R("CDN 地址 HTTP " + x.status + "，回跳转接口重新拿 | " + Diag.priv(e.item.desc.slice(0, 12)));
+                    R("CDN 地址 HTTP " + x.status + "（" + whence(x, url) + "），回跳转接口重新拿 | " + Diag.priv(e.item.desc.slice(0, 12)));
                     get(e, e.src, from, to, true).then(function (r) { e.url = r.url; ok(r); }, fail);
                     return;
                 }
-                fail(new Error(x.status === 206 ? "回来的字节对不上（" + (x.response ? x.response.byteLength : 0) + "B，" + (cr ? cr[0] : "无 Content-Range") + "）" : "HTTP " + x.status));
+                fail(new Error(x.status === 206 ? "回来的字节对不上（" + (x.response ? x.response.byteLength : 0) + "B，" + (cr ? cr[0] : "无 Content-Range") + "）" :
+                               "HTTP " + x.status + "（" + whence(x, url) + "）"));
             };
             /* 「卡住」那行用：字节还在来，还是一个都没到。 */
             x.onprogress = function (ev) {
@@ -173,19 +174,47 @@ var Mse = (function () {
         });
     }
     function abort(e) { if (e.xhr) { try { e.xhr.abort(); } catch (x) {} e.xhr = null; } }
+    /* HTTP 失败那行带上是谁回的（2026-11-25：一台新装的 Tizen 8 每条视频一秒内 HTTP 503 / 404，日志说不出是跳转接口自己回的还是 CDN）。
+     * 响应地址还在 /aweme/v1/play/ 上 = 跳转接口自己回的、没跳走；Content-Type 跨域也读得到（CORS 安全名单里的头），HTML 错误页一眼看得出。 */
+    function whence(x, url) {
+        var u = String(x.responseURL || url || ""), ct = "";
+        try { ct = (x.getResponseHeader("Content-Type") || "").split(";")[0]; } catch (z) {}
+        return (u.split("/")[2] || "?") + (u.indexOf("/aweme/v1/play/") >= 0 ? " 跳转接口没跳走" : "") + (ct ? " " + ct : "") + " " +
+               (x.response ? x.response.byteLength : 0) + "B";
+    }
 
     // ---------- MediaSource 与 append 队列 ----------
 
+    /* 一个 MediaSource 打开之后整个会话都用它；**没打开就作废、下一次换一个新的重开**（2026-11-25）。原来失败的那个 Promise 一直留着
+     * （只有 detach 清它），一台 Tizen 9 启动后第一条「MediaSource 5 秒没打开」，之后每一条都当场拿到同一个失败，「按下键重试」也是，
+     * 直到重开应用。为什么没打开还不知道：那一行带上页面在不在前台、元素的状态、启动了多久；晚到的 sourceopen 也报一行。 */
+    var opens = 0;
     function open() {
         if (openP) { return openP; }
         ms = new MediaSource();
-        var mine = ms;
-        openP = new Promise(function (ok, fail) {
-            mine.addEventListener("sourceopen", function () { ok(); });
-            setTimeout(function () { if (mine.readyState !== "open") { fail(new Error("MediaSource 5 秒没打开")); } }, 5000);
+        var mine = ms, at = Date.now(), url = URL.createObjectURL(ms), p, late = false, n = ++opens;
+        p = openP = new Promise(function (ok, fail) {
+            mine.addEventListener("sourceopen", function () {
+                var ms0 = Date.now() - at;
+                if (late || ms0 > 1500) { R("MediaSource 第 " + n + " 次打开用了 " + ms0 + "ms" + (late ? "（已经当失败了）" : "")); }
+                ok();
+            });
+            setTimeout(function () {
+                if (mine.readyState === "open") { return; }
+                if (openP !== p) { fail(new Error("MediaSource 5 秒没打开")); return; }      // 已经拆了（detach）：没人等它，不报
+                late = true;
+                var perf = typeof performance !== "undefined" && performance.now ? "，页面开了 " + Math.round(performance.now() / 1000) + " 秒" : "";
+                R("MediaSource 第 " + n + " 次 5 秒没打开：页面 " + document.visibilityState + (document.hasFocus && !document.hasFocus() ? "、没焦点" : "") +
+                  "，MediaSource " + mine.readyState + "，元素 readyState=" + el.readyState + " networkState=" + el.networkState +
+                  (el.error ? " error=" + el.error.code + " " + el.error.message : " 没有 error") + "，src " + (el.src === url ? "还是它" : "已经换了") +
+                  (document.body && document.body.contains(el) ? "" : "，元素不在文档里") + perf + "；作废，下一条换一个新的重开");
+                openP = null;
+                if (ms === mine) { ms = null; }
+                fail(new Error("MediaSource 5 秒没打开"));
+            }, 5000);
         });
-        el.src = URL.createObjectURL(ms);
-        return openP;
+        el.src = url;
+        return p;
     }
 
     function createBuffers(vcodec, acodec) {

@@ -242,6 +242,30 @@ var Feed = (function () {
      * （和点播的跳转接口一样，开发机 curl 直接取到）。**编码几乎全是 H.265**（live_core_sdk_data 里各档的 VCodec；只有 240p 那一档是
      * H.264，不声明 HEVC 也一样），HLS 是 MPEG-TS 分片、每片 ~3.7 秒。放法交给 Player：直播间走 src（<video> 直接放 m3u8）。
      * 宽高接口没给，按 stream_orientation 猜（1 竖屏手机直播，2 横屏），只用来摆封面。 */
+    /* 每一档流的编码、尺寸、地址（2026-11-25，开发机上一次匿名问官网直播首页，20 个直播间）。stream_url.live_core_sdk_data.pull_data.stream_data
+     * 是一段 JSON 字符串：data 下每档（origin、uhd、hd、sd、ld、md，还有只有声音的 ao）一个 main，里面有 flv / hls 地址和 sdk_params（又是一段
+     * JSON：VCodec "h265"/"h264"、resolution "540x960"、fps）。flv_pull_url 那四个就是其中四档，地址逐字相同（FULL_HD1 = origin 或 uhd，
+     * HD1 = hd，SD2 = sd，SD1 = ld）；**md 只在这里有**。那 20 个：origin / uhd / hd / sd / ld 几乎全是 H.265（一个 origin 是 H.264），
+     * 竖屏的 hd 720x1280（或 720x1270）、sd 540x960、ld 480x853；**md 全是 H.264**，360x640 或 240x4xx、15fps，FLV 在 https 的另一台主机上
+     * （各取了一段开头：md 的视频是 AVC，sd 的是 HEVC；不要 Referer、cookie）。options.qualities 里也有每档的 v_codec（bytevc1 = H.265）和
+     * resolution，sdk_params 缺了用它。没有 stream_data 的直播间回空数组，照旧只用 flv。 */
+    function liveStreams(su) {
+        var out = [], pd = su.live_core_sdk_data && su.live_core_sdk_data.pull_data || {}, data = {}, opts = {};
+        try { data = JSON.parse(pd.stream_data || "{}").data || {}; } catch (e) { return out; }
+        ((pd.options || {}).qualities || []).forEach(function (q) { if (q && q.sdk_key) { opts[q.sdk_key] = q; } });
+        for (var k in data) {
+            if (!data.hasOwnProperty(k) || k === "ao") { continue; }
+            var m = data[k] && data[k].main || {}, p = {}, o = opts[k] || {};
+            if (!m.flv) { continue; }
+            try { p = JSON.parse(m.sdk_params || "{}"); } catch (e) {}
+            var c = String(p.VCodec || o.v_codec || "");
+            var res = /^(\d+)x(\d+)$/.exec(p.resolution || o.resolution || "") || [0, 0, 0];
+            out.push({q: k, codec: /265|bytevc1|hevc/i.test(c) ? "h265" : /264|avc/i.test(c) ? "h264" : c || "?",
+                      w: +res[1], h: +res[2], fps: Math.round(p.fps || o.fps || 0), flv: m.flv});
+        }
+        out.sort(function (a, b) { return b.w * b.h - a.w * a.h; });
+        return out;
+    }
     function normaliseLive(x, why) {
         var r = x && x.data;
         if (!r || !r.id_str) { why.push("空"); return null; }
@@ -255,6 +279,7 @@ var Feed = (function () {
             desc: r.title || "", author: o.nickname || "", secUid: o.sec_uid || "", uid: o.id_str || "",
             avatar: first(o.avatar_thumb), cover: first(r.cover), thumb: first(r.cover), coverKind: "直播封面",
             url: url, flv: flv.FULL_HD1 || flv.HD1 || flv.SD2 || flv.SD1 || "",     // 每个地址带自己的 sign，不能从 HLS 地址改出来（403）
+            streams: liveStreams(su),     // 每一档的编码和尺寸：电视解不了 flv 那一档时 Player 从这里挑（只在内存里，直播不缓存）
             w: land ? 1920 : 1080, h: land ? 1080 : 1920, dur: 0, time: r.create_time || 0,
             users: users, likes: 0, comments: 0, collects: 0, shares: 0, digged: false, collected: false, mix: null, type: 0, uri: ""
         };
@@ -509,6 +534,8 @@ var Feed = (function () {
         urlOf: function (it) { return it.live || !it.uri ? it.url : playUrl(it.uri, ratioFor(it)); },
         ratioOf: function (it) { return it.live || !it.uri ? "" : ratioFor(it); },
         h264Cap: function () { return capH; },
+        /* 这台电视放成过高过 1088 的 H.264：直播挑档时，高过 1088 的 H.264 那一档只在放成过时才挑。 */
+        h264Tall: function () { return tallOk; },
         /* 一条 h 高的 H.264 流解码失败。这一下学到了上限就回 true（调用方用矮一档重放这一条）。 */
         h264Failed: function (h) {
             if (capH || tallOk || !(h > CAP)) { return false; }

@@ -21,7 +21,7 @@ var Login = (function () {
     var frame = null;
     var timer = 0;
     var cb = null;
-    var lastQr = "", lastText = "", lastBody = "", t0 = 0, refreshedAt = 0, done = false;
+    var lastQr = "", lastText = "", lastBody = "", lastHref = "", t0 = 0, refreshedAt = 0, done = false;
     var panel = null;          // 二维码往上四层的容器：状态提示（已扫码、已失效）出现在这里
 
     function stop() {
@@ -66,11 +66,13 @@ var Login = (function () {
             cb({phase: "qr", src: qr.src});
         }
         if (qr) { panel = qr; for (var k = 0; k < 4 && panel.parentElement; k++) { panel = panel.parentElement; } }
+        var where = href.split("?")[0].split("#")[0];
+        if (where !== lastHref) { lastHref = where; Log.report("login", "框在 " + where.replace(/^https?:\/\//, "")); }
         /* 整页正文只记日志 —— 里面本来就有「验证码登录」「获取验证码」，拿它匹配「验证」会误报。 */
         var body = d.body ? d.body.innerText.replace(/\s+/g, " ") : "";
         if (body !== lastBody) {
             lastBody = body;
-            Log.report("login", "整页文字：" + Diag.priv(body.slice(0, 140)));   // 扫码之后这页上可能有昵称
+            Log.report("login", "整页文字：" + Diag.priv(body.slice(0, 140)) + "（" + kinds(body) + "）");   // 扫码之后这页上可能有昵称
             /* 新设备验证这类我们处理不了的，原样给观众看，让他们在手机上照做。 */
             if (/身份验证|安全验证|验证身份/.test(body)) { cb({phase: "status", msg: body.slice(0, 60)}); }
         }
@@ -84,8 +86,23 @@ var Login = (function () {
             } else if (/扫码成功|已扫码|确认/.test(text)) {
                 msg = "已扫码，请在手机上点「确认登录」";
             }
+            Log.report("login", "二维码那块：" + (panel ? kinds(text) : "还没找到二维码") + (msg ? "，提示「" + msg + "」" : ""));
             if (msg) { cb({phase: "status", msg: msg}); }
         }
+    }
+
+    /* 页面文字落在哪几类、多长（2026-11-25）。原文是私人的（扫码之后可能有昵称），上传时成了「…」：一台 Tizen 5.5 二十分钟换了七张码
+     * 也没登上，日志说不出它停在哪一步 —— 没人扫、扫了没确认、确认了卡在登录中、还是要验证。只报类别，不报原文。
+     * 「验证码登录」「获取验证码」是登录页上本来就有的字，先拿掉再判「验证」。 */
+    function kinds(text) {
+        var t = text.replace(/验证码登录|获取验证码/g, ""), out = [];
+        if (/扫码成功|已扫码|扫描成功/.test(t)) { out.push("已扫码"); }
+        if (/确认/.test(t)) { out.push("确认"); }
+        if (/正在登录|登录中/.test(t)) { out.push("登录中"); }
+        if (/失效|过期|刷新/.test(t)) { out.push("过期"); }
+        if (/验证/.test(t)) { out.push("验证"); }
+        if (/频繁|风险|异常|稍后再试/.test(t)) { out.push("风控"); }
+        return "类别 " + (out.join("·") || "其他") + "，" + text.length + " 字";
     }
 
     /* 过期时点框里的「刷新」。找不到就整个重开 —— 但 20 秒内只重开一次，免得循环。 */
@@ -105,7 +122,7 @@ var Login = (function () {
 
     function open() {
         stop();
-        lastQr = ""; lastText = ""; lastBody = ""; panel = null; done = false;
+        lastQr = ""; lastText = ""; lastBody = ""; lastHref = ""; panel = null; done = false;
         t0 = Date.now();
         frame = document.createElement("iframe");
         frame.className = "login-frame";

@@ -866,8 +866,12 @@
         }
     }
 
-    Player.on("playing", function () {
-        errorsInRow = 0;
+    /* errorsInRow 清零要等这一条真的放起来了：出画面后播放头走过 2 秒（2026-11-25）。原来在 playing 就清 —— 一类 Tizen 5.5 上每个直播间
+     * 都是先出画面、一秒内才报解码失败，计数永远到不了 5，直播页每两秒自己换一个台、没完没了，屏幕上只有「这条放不了」。 */
+    var okFrom = null;        // {id, t}：这一条出画面时的播放头
+    var decodeInRow = 0;      // 连着的失败里有几个是直播解码失败（元素报错 3 / 4、MSE 报错、一档都解不了）
+    Player.on("playing", function (it) {
+        okFrom = it ? {id: it.id, t: Player.state().t} : null;
         if (switchInfo && !switchInfo.playingAt) { switchInfo.playingAt = Date.now(); }
         if (bootStartBridge) { bootStartBridge(); bootStartBridge = null; }
         if (!bootTold) {
@@ -926,6 +930,7 @@
     Player.on("ended", function () { next("播完"); });
     Player.on("progress", function (t, d) {
         var it = current();
+        if (okFrom && it && it.id === okFrom.id && t - okFrom.t >= 2) { okFrom = null; errorsInRow = 0; decodeInRow = 0; }
         if (it && it.live) { return; }             // 那一行是「直播中 · N 人在看」，没有进度
         if (d && Player.state().id === watching.id) { watching.frac = Math.max(watching.frac, t / d); }
         if (d) { $("bar").style.width = (t / d * 100).toFixed(2) + "%"; }
@@ -933,16 +938,20 @@
     });
     Player.on("error", function (why) {
         if (view !== "feed") { return; }
+        okFrom = null;
         errorsInRow++;
+        decodeInRow = /^直播：(解不了|元素报错 [34]|mpegts MediaError)/.test(why) ? decodeInRow + 1 : 0;
         var it = feed().current();
         Log.report("播放", "放不了（" + why + "），连续第 " + errorsInRow + " 条 | " + (it ? it.id + " " + Diag.priv(it.desc.slice(0, 16)) : ""));
         if (errorsInRow >= 5) {
             Player.stop();
-            trouble("连续好几条都放不了，可能是网络问题。按下键重试", 8000);
+            /* 连着五个直播间都是解码失败：不是网络，重试也一样（2026-11-25，一类 Tizen 5.5）。说清楚，观众就知道去看别的标签。 */
+            trouble(decodeInRow >= errorsInRow ? "这台电视解不了这些直播的画面，换个标签看看吧" : "连续好几条都放不了，可能是网络问题。按下键重试", 8000);
             errorsInRow = 0;
+            decodeInRow = 0;
             return;
         }
-        toast(why === "太慢" ? "这条加载太慢，跳到下一条" : "这条放不了，跳到下一条", 1500);
+        toast(why === "太慢" ? "这条加载太慢，跳到下一条" : why === "直播：解不了" ? "这台电视解不了这个直播间的画面，换下一个" : "这条放不了，跳到下一条", 1500);
         setTimeout(function () { next("出错跳过"); }, 800);
     });
 

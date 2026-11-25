@@ -243,6 +243,10 @@ var Bridge = (function () {
         return "加上的参数[" + (added.join(",") || "无") + "] UIFID_TEMP " + (cookie === null ? "不在" : "在") +
                (uifid !== null && cookie !== null ? "，和 uifid " + (uifid === cookie ? "一样" : "不一样") : "");
     }
+    /* 放行了也报一次（每个接口每次运行一次，2026-11-25）：两台没登录的 Tizen 5.5 作品列表次次 Argus 403，签名 SDK 加的是
+     * [verifyFp,fp,(msToken,)a_bogus]、没有 uifid，UIFID_TEMP 在 jar 里；一台没登录的 Tizen 6.0 拿到了。有了放行那一侧加了什么，
+     * 两边才对得上。推荐流不查 uifid，一起报：看这个引擎上的 SDK 到底加不加 uifid。 */
+    var SIGN_WATCH = /^\/aweme\/v\d\/web\/(aweme\/post|mix\/aweme|tab\/feed)\/$/, signTold = {};
 
     /* quiet：上报一类的请求（播放一次、观看历史）。aweme/stats 正常就回 200 + 空正文（2026-09-30，页面在 douyin.com 上、
      * cookie 齐全的测试台里也一样），空正文算成功；失败也不计入「连续 3 次失败就重建框」—— 为了一个上报拆掉签名桥不值。 */
@@ -276,6 +280,10 @@ var Bridge = (function () {
                      * 桌面实测里这两个一直是分开的两种失败，分开报。 */
                     if (t === "blocked") { bad(new Error("blocked")); return; }
                     if (!t) { if (quiet) { ok({}); } else { bad(new Error("空正文")); } return; }
+                    if (SIGN_WATCH.test(path) && !signTold[path]) {
+                        signTold[path] = true;
+                        Log.report("bridge", "放行了（" + path.replace(/^\/aweme\/v\d\/web\//, "") + "）：" + signedWith(x));
+                    }
                     try { ok(JSON.parse(t)); } catch (e) { bad(new Error("不是 JSON：" + t.slice(0, 30))); }
                 };
                 x.ontimeout = function () { bad(new Error("12 秒无响应")); };

@@ -50,8 +50,16 @@ var Player = (function () {
     var warm = {};             // item.id → {state: "在途"|"好了"|"失败", url, ms, bytes}
     /* H.264 高度上限（feed.js 的 h264Cap）：这一条出画面时的播放头，走过 2 秒才算放成（-1 = 已经算过 / 还没出画面）。
      * 不拿「到画面」当放成：10-27 那台 Tizen 6.5 上，竖屏片先报了到画面（播放头挪了一点），紧接着才解码失败。 */
-    var playedFrom = -1, tallOk = false;
+    var playedFrom = -1, tallOk = false, shownAt = 0;
     var stFailTall = false;    // 自测 --tall：参考机解得了高的，假装解不了
+    /* 上一次离开直播：{at, secs}。点播出错的那几行带上「几秒前离开直播、在那个直播间待了多久」（2026-11-20 一台电视看了 42 分钟直播，
+     * 回来点播一条都解不了，再进直播又好了 —— 一个样本，先让下一份日志分得开）。 */
+    var lastLive = null;
+    function afterLive() {
+        if (!lastLive || (item && item.live)) { return ""; }
+        var ago = Math.round((Date.now() - lastLive.at) / 1000);
+        return ago < 1800 ? "，" + ago + " 秒前离开直播（在那个直播间待了 " + lastLive.secs + " 秒）" : "";
+    }
 
     function isLive(g) { return g === gen; }
 
@@ -115,13 +123,107 @@ var Player = (function () {
         try { p.detachMediaElement(); } catch (e) {}
         try { p.destroy(); } catch (e) {}
     }
-    /* 一个直播间只报一次错：mpegts 的网络错和媒体错、元素自己的 error 可能前后脚都来，报两次 app 就连跳两个台。 */
+
+    /* 直播挑哪一档（2026-11-25，诊断日志）。一类 Tizen 5.5 上每个直播间都放不了：出画面（1080x1920，720x1280 也一样）之后一秒内
+     * 元素报错 3，或者 mpegts 报 MediaMSEError（appendBuffer：元素已经出错）。这几台启动那行的问询都答 hev1 1080x1920=否（21 台里 4 台，
+     * 全是 Tizen 5.5）；答「是」的 Tizen 5.5 竖屏直播照常。flv 那一档（FULL_HD1）几乎全是 H.265 原画。分不开的两种：H.265 根本解不了，
+     * 还是高过 1088 的才解不了（720x1280 也高过 1088）。
+     * 所以**只有问询答 1080x1920=否的电视**才挑档：从这个直播间的各档（feed.js 的 streams）里挑问询说解得了的最大一档 —— H.265 按它自己的
+     * 尺寸问，H.264 不高于 1088 的都算（高过的要这台电视放成过）；md 那档（H.264 360x640）几乎每个直播间都有。挑的那档还没放成 2 秒就解码
+     * 失败，这个直播间换下一档：失败的是不高于 1088 的 H.265 → 这次运行不再挑 H.265（不是高度的事）；高的 → 只挑比它矮的。「挑档」「放成了」
+     * 「解不了」几行就是那个判别。一档都没有了才说解不了。
+     * 答「是」的电视照旧放 flv 那一档：一台 Tizen 6.0 上两个直播间次次元素报错 3、别的照常，原因不知道 —— 「到画面」「放不了」两行带着
+     * 这一档的编码、尺寸、帧率和 mpegts 解出来的编码串，下一份日志分得开。 */
+    var hevcNo = false, hevcAsked = {}, liveBad = {h265: Infinity, h264: Infinity}, liveOkTold = {};
+    var liveS = null, livePicked = false, liveSteps = 0, roomTried = {room: "", q: {}}, flvUrl = "", flvInfo = "";
+    var stLive = "";           // 自测 --livecodec："narrow" 假装问询说高过 1088 的 H.265 不行；"nohevc" 再假装 H.265 一出画面就解码失败；"none" 什么都失败
+    var DECODE = /元素报错 [34]|MediaMSEError|自测假装/;
+    function askHevc(w, h) {
+        if (stLive && h > 1088) { return false; }
+        var k = w + "x" + h;
+        if (!hevcAsked.hasOwnProperty(k)) {
+            try { hevcAsked[k] = MediaSource.isTypeSupported("video/mp4; codecs=\"hev1.1.6.L120.90\"; width=" + w + "; height=" + h); } catch (e) { hevcAsked[k] = false; }
+        }
+        return hevcAsked[k];
+    }
+    function sName(s) { return s.q + " " + (s.codec === "h265" ? "H.265" : s.codec === "h264" ? "H.264" : s.codec) + " " + (s.w ? s.w + "x" + s.h : "尺寸?") + (s.fps ? " " + s.fps + "fps" : ""); }
+    /* 问询答 1080x1920=否 时按尺寸挑：{s, skipped} 挑到了；{s: null, why} 一档都没有；null 不用挑（照旧放 flv 那一档）。 */
+    function pickLive(it) {
+        if (!(hevcNo || stLive) || !it.streams || !it.streams.length) { return null; }
+        var ss = it.streams, tried = roomTried.room === it.room ? roomTried.q : {}, skipped = [];
+        for (var i = 0; i < ss.length; i++) {
+            var s = ss[i], ok = false;
+            if (tried[s.q]) { continue; }
+            if (s.codec === "h265") { ok = s.w > 0 && s.h < liveBad.h265 && askHevc(s.w, s.h); }
+            else if (s.codec === "h264") { ok = s.h < liveBad.h264 && (s.h <= 1088 || Feed.h264Tall()); }
+            if (ok) { return {s: s, skipped: skipped}; }
+            skipped.push(s.q);
+        }
+        return {s: null, why: ss.map(sName).join("、")};
+    }
+    /* flv 那一档是各档里的哪一档（地址逐字相同），只用来写日志。 */
+    function defaultStream(it) {
+        var ss = it.streams || [];
+        for (var i = 0; i < ss.length; i++) { if (ss[i].flv === it.flv) { return ss[i]; } }
+        return null;
+    }
+    function liveNote() {
+        var mi = flvInfo;
+        if (!mi && flvP) { try { var m = flvP.mediaInfo; if (m && m.videoCodec) { mi = m.videoCodec; } } catch (e) {} }
+        return (liveS ? " · 流 " + sName(liveS) : " · 流 ?") + (mi ? "，解出 " + mi : "");
+    }
+    /* 挑的那档解码失败（还没放成 2 秒）：这个直播间换下一档，按失败的是什么记下这次运行以后怎么挑。 */
+    function stepDown(it, s, why) {
+        roomTried.q[s.q] = true;
+        var learnt = "";
+        if (s.codec === "h265" && s.h > 0) {
+            if (s.h <= 1088) { if (liveBad.h265) { liveBad.h265 = 0; learnt = "，不高于 1088 的 H.265 也解不了：这次运行不再挑 H.265"; } }
+            else if (s.h < liveBad.h265) { liveBad.h265 = s.h; learnt = "，这次运行 H.265 只挑比 " + s.h + " 矮的"; }
+        } else if (s.codec === "h264" && s.h > 0 && s.h < liveBad.h264) { liveBad.h264 = s.h; learnt = "，这次运行 H.264 只挑比 " + s.h + " 矮的"; }
+        liveSteps++;
+        Log.report("直播", "解不了 " + sName(s) + "（" + why + "）" + learnt + "，这个直播间换下一档 | " + it.room);
+        play(it, playNote + "·降档", 0);
+    }
+    /* 这个直播间一档都解不了：拆掉正在放的，告诉 app（它数着、连着五个就说这台电视解不了直播的画面，见 app.js）。 */
+    function liveGiveUp(it, why) {
+        if (engine === "mse") { Mse.detach(); mseE = null; }
+        stopFlv();
+        try { el.pause(); } catch (e) {}
+        el.removeAttribute("src");
+        try { el.load(); } catch (e) {}
+        engine = "";
+        place(null);
+        Log.report("直播", "放不了：这台电视一档都解不了（" + why + "）| " + it.room);
+        var g = gen;
+        setTimeout(function () { if (g === gen && handlers.error) { handlers.error("直播：解不了"); } }, 0);
+    }
+    /* 挑档挑出来的这一档放成了（出画面后走了 2 秒）：每种编码 + 尺寸说一次。 */
+    function livePlayed() {
+        if (!item || !item.live || !livePicked || !liveS) { return; }
+        var k = liveS.codec + liveS.w + "x" + liveS.h;
+        if (liveOkTold[k]) { return; }
+        liveOkTold[k] = true;
+        Log.report("直播", "放成了 " + sName(liveS) + "（问询说 1080x1920 的 H.265 不行" + (stLive ? "，自测假装的" : "") +
+                   (liveSteps ? "；这个直播间降了 " + liveSteps + " 档" : "") + "）" + liveNote() + " | " + item.room);
+    }
+
+    /* 一个直播间只报一次错：mpegts 的网络错和媒体错、元素自己的 error 可能前后脚都来，报两次 app 就连跳两个台。
+     * **拆 mpegts 不能在它自己的回调里同步做**（2026-11-25，三台 Tizen 5.5 传上来的「未处理的 Promise 异常」）：MediaMSEError 是
+     * appendMediaSegment 里同步发出来的，这里当场 destroy，回到它那个 MEDIA_SEGMENT 回调的下一句 _loading_controller 已经是 null
+     * （notifyBufferedPositionChanged of null）；转封装器用 Promise.resolve().then 排着的回调随后再碰已经拆掉的 _emitter（emit of null）。
+     * 观众看不见，却每次都当出事上传。所以记下来、拆和往下走都放到下一轮（排着的 Promise 回调先跑完）。 */
     function failFlv(why) {
         if (engine !== "flv" || !flvItem || flvFailed === gen) { return; }
         flvFailed = gen;
-        Log.report("直播", "放不了：" + why + " | " + flvItem.room + " " + flvItem.flv.split("?")[0].split("/").slice(2, 3)[0]);
-        stopFlv();
-        if (handlers.error) { handlers.error("直播：" + why); }
+        var it = flvItem, p = flvP, g = gen, s = liveS, early = !(told && playedFrom < 0), picked = livePicked;
+        Log.report("直播", "放不了：" + why + " | " + it.room + " " + (flvUrl || it.flv).split("?")[0].split("/").slice(2, 3)[0] + liveNote() +
+                   (told ? "，出画面后 " + (Date.now() - shownAt) + "ms" : "，还没出画面"));
+        setTimeout(function () {
+            if (flvP === p) { stopFlv(); }
+            if (g !== gen) { return; }                   // 这期间已经换了台
+            if (picked && s && early && DECODE.test(why)) { stepDown(it, s, why); return; }
+            if (handlers.error) { handlers.error("直播：" + why); }
+        }, 0);
     }
     function playFlv(it) {
         pendingLive = false;
@@ -131,6 +233,7 @@ var Player = (function () {
         engine = "flv";
         place(null);
         usedWarm = "无";
+        flvInfo = "";
         var lib, g = gen;
         try { lib = MpegtsLib.get(); } catch (e) {
             Log.report("直播", "mpegts.js 起不来（" + e.message + "），退回 <video> 直接放 m3u8");
@@ -139,8 +242,12 @@ var Player = (function () {
         }
         flvItem = it;
         try {
-            flvP = lib.createPlayer({type: "flv", isLive: true, url: it.flv}, {enableWorker: false});
+            flvP = lib.createPlayer({type: "flv", isLive: true, url: flvUrl || it.flv}, {enableWorker: false});
             flvP.on(lib.Events.ERROR, function (type, detail, info) { if (g === gen) { failFlv("mpegts " + type + " " + detail + " " + (info && info.msg || "")); } });
+            /* mpegts 从流里读出来的编码串（hvc1.… / avc1.…）、尺寸、帧率：「到画面」「放不了」两行带上。 */
+            flvP.on(lib.Events.MEDIA_INFO, function (mi) {
+                if (g === gen && mi) { flvInfo = (mi.videoCodec || "?") + (mi.width ? " " + mi.width + "x" + mi.height : "") + (mi.fps ? " " + Math.round(mi.fps) + "fps" : ""); }
+            });
             /* 看门狗看「字节还在不在来」。统计信息是定时器每 600ms 发的、不管有没有收到字节，只有 speed（最近一秒 KB/s）> 0 才算进展 ——
              * 只数事件的话，CDN 连接吊住、画面冻着，看门狗也永远不报。 */
             flvP.on(lib.Events.STATISTICS_INFO, function (st) { if (g === gen && st && st.speed > 0) { flvTicks++; } });
@@ -209,13 +316,19 @@ var Player = (function () {
             if (!mseE || marks.ready === undefined || el.currentTime < mseE.base - 0.5 || el.currentTime >= mseE.base + Mse.SLOT) { return; }
         }
         told = true;
+        shownAt = Date.now();
         playedFrom = rel();
         var detail = engine === "mse" ? "MSE 槽" + mseE.slot + "，seek 发出 " + marks.ready + " seeked " + (marks.seeked || "?") :
                      "元数据 " + (marks.loadedmetadata || "?") + " 首帧数据 " + (marks.loadeddata || "?") + " 可播 " + (marks.canplay || "?");
         var dims = engine === "mse" ? mseE.vw + "x" + mseE.vh : el.videoWidth + "x" + el.videoHeight;
         var ratio = Feed.ratioOf(item);
+        /* 直播带上这一档的编码、尺寸、帧率和 mpegts 解出来的编码串：分得开「H.265 根本不行」和「高过 1088 的不行」（2026-11-25） */
         Log.report("到画面", (Date.now() - switchAt) + "ms（" + detail + "）" + (playNote ? playNote + " " : "") + (ratio && ratio !== "1080p" ? "档=" + ratio + " " : "") + "预热=" + usedWarm +
-                   (fellBack ? "（最终地址失败，退回跳转接口）" : "") + " " + dims + " | " + Diag.priv(item.author || "") + " " + Diag.priv(item.desc.slice(0, 16)));
+                   (fellBack ? "（最终地址失败，退回跳转接口）" : "") + " " + dims + (engine === "flv" ? liveNote() : "") + " | " + Diag.priv(item.author || "") + " " + Diag.priv(item.desc.slice(0, 16)));
+        if (engine === "flv" && liveS && (stLive === "none" || (stLive === "nohevc" && liveS.codec === "h265"))) {
+            var gf = gen;
+            setTimeout(function () { if (gf === gen) { failFlv("自测假装元素报错 3"); } }, 300);
+        }
         if (handlers.playing) { handlers.playing(item); }
         /* playing 不等于画面已经上屏：撤封面要等解码器真的在出帧。**requestVideoFrameCallback
          * 在这台电视上从不回调**（2026-09-29 设备实测：21 次全是 1 秒兜底 —— 视频走硬件视频层，
@@ -254,11 +367,18 @@ var Player = (function () {
                 start(Feed.urlOf(item));
                 return;
             }
+            /* 原来这里只有 app 那行「放不了（video error 3）」：一台电视看了 42 分钟直播，回来点播 MSE 三次元素报错 3、改走 src 也是 3，
+             * 再进直播又好了（2026-11-20，一个样本）。下一次要分得开：元素自己的 message、走的哪条路、出没出过画面、离开直播多久。 */
+            var src = String(el.currentSrc || el.src || "");
+            Log.report("播放", "src 放不了：元素报错 " + code + (el.error && el.error.message ? " " + el.error.message : "") + " | " +
+                       (src.indexOf("blob:") === 0 ? "blob" : src.indexOf("/aweme/v1/play/") >= 0 ? "跳转接口" : "CDN " + src.split("/")[2]) +
+                       (Feed.ratioOf(item) ? " 档=" + Feed.ratioOf(item) : "") + " readyState=" + el.readyState + " " + el.videoWidth + "x" + el.videoHeight +
+                       "，切过来 " + (Date.now() - switchAt) + "ms" + (told ? "，出过画面" : "，没出过画面") + afterLive() + " | " + item.id);
             if (handlers.error) { handlers.error("video error " + code); }
         });
         el.addEventListener("timeupdate", function () {
             if (item && handlers.progress) { handlers.progress(rel(), relDur()); }
-            if (item && playedFrom >= 0 && rel() - playedFrom >= 2) { playedFrom = -1; tallPlayed(); }
+            if (item && playedFrom >= 0 && rel() - playedFrom >= 2) { playedFrom = -1; tallPlayed(); livePlayed(); }
         });
     }
 
@@ -274,7 +394,8 @@ var Player = (function () {
         if (d && /^avc/.test(d.codec) && tallFailed(it, d.h, code)) { play(it, note + "·矮一档", t); return; }
         mseFails++;
         if (mseFails >= 3) { mseOff = why; }
-        Log.report("播放", "MSE 管线坏了（" + why + "），第 " + mseFails + " 次，" + (mseOff ? "这次会话改走 src" : "重建后接着放") + " | " + Diag.priv(it.desc.slice(0, 16)));
+        Log.report("播放", "MSE 管线坏了（" + why + "），第 " + mseFails + " 次，" + (mseOff ? "这次会话改走 src" : "重建后接着放") +
+                   (d ? "，" + d.codec + " " + d.w + "x" + d.h : "") + afterLive() + " | " + Diag.priv(it.desc.slice(0, 16)));
         play(it, note + "·重建", t);
     }
 
@@ -366,11 +487,17 @@ var Player = (function () {
         });
     }
 
+    /* 离开一个出过画面的直播间（换台、换到点播、离开视频页）：报一行，记下来给点播出错的那几行用（afterLive）。 */
+    function leaveLive() {
+        if (!(item && item.live && told)) { return; }
+        var secs = Math.round((Date.now() - switchAt) / 1000);
+        lastLive = {at: Date.now(), secs: secs};
+        Log.report("直播", "离开 " + item.room + "：看了 " + secs + " 秒，中途停了 " + liveStalls.length + " 次" +
+                   (liveStalls.length ? "（" + liveStalls.join("/") + "ms）" : "") + "（" + (engine === "flv" ? "mpegts·FLV" : "<video>·m3u8") + "）");
+    }
+
     function play(it, note, startAt) {
-        if (item && item.live && told) {
-            Log.report("直播", "离开 " + item.room + "：看了 " + Math.round((Date.now() - switchAt) / 1000) + " 秒，中途停了 " + liveStalls.length + " 次" +
-                       (liveStalls.length ? "（" + liveStalls.join("/") + "ms）" : "") + "（" + (engine === "flv" ? "mpegts·FLV" : "<video>·m3u8") + "）");
-        }
+        leaveLive();
         liveWait = 0;
         liveStalls = [];
         gen++;
@@ -388,12 +515,30 @@ var Player = (function () {
         stuckSince = Date.now();
         clearTimeout(flvTimer);
         pendingLive = false;
-        if (it.live && it.flv && engine === "mse") {
+        liveS = null;
+        livePicked = false;
+        flvUrl = "";
+        var pk = null;
+        if (it.live) {
+            if (roomTried.room !== it.room) { roomTried = {room: it.room, q: {}}; liveSteps = 0; }
+            pk = pickLive(it);
+            if (pk && pk.s) {
+                liveS = pk.s;
+                livePicked = true;
+                flvUrl = pk.s.flv;
+                Log.report("直播", "挑档 " + sName(pk.s) + (pk.skipped.length ? "（跳过 " + pk.skipped.join("、") + "）" : "") + " | " + it.room);
+            } else if (!pk) {
+                liveS = defaultStream(it);
+                flvUrl = it.flv;
+            }
+        }
+        var goLive = pk && !pk.s ? function () { liveGiveUp(it, pk.why); } : flvUrl ? function () { playFlv(it); } : null;
+        if (goLive && engine === "mse") {
             try { el.pause(); } catch (e) {}
             pendingLive = true;
             var g = gen;
-            flvTimer = setTimeout(function () { if (g === gen) { playFlv(it); } }, FLV_DELAY);
-        } else if (it.live && it.flv) { playFlv(it); } else if (useMse(it)) { playMse(it, startAt); } else { playSrc(it, startAt); }
+            flvTimer = setTimeout(function () { if (g === gen) { pendingLive = false; goLive(); } }, FLV_DELAY);
+        } else if (goLive) { goLive(); } else if (useMse(it)) { playMse(it, startAt); } else { playSrc(it, startAt); }
     }
 
     /* 播放头前面还有几秒缓冲（MSE 下只算这一条的槽里、播放头所在的那一段）。 */
@@ -437,11 +582,16 @@ var Player = (function () {
             wire();
             wireRest();
             Mse.init(video);
-            /* 尺寸问询（Tizen 的扩展写法，Shaka 在 Tizen 上就这么问）：能不能事先知道放不放得了高的，先攒证据 —— 现在只靠解码失败学（2026-10-27）。 */
+            /* 尺寸问询（Tizen 的扩展写法，Shaka 在 Tizen 上就这么问）：能不能事先知道放不放得了高的，先攒证据 —— 点播只靠解码失败学（2026-10-27）。
+             * **avc1 1080x1920 参考机答「否」却放得了**，不能拿它判。hev1 1080x1920 答「否」的 4 台 Tizen 5.5 直播全放不了、答「是」的照常
+             * （2026-11-25），直播按它挑档（见 pickLive）。hev1 另外几种尺寸和 hvc1 是给下一份日志的：分得开「H.265 不行」和「高的 H.265 不行」。 */
             try {
-                var ask = function (c, w, h) { return MediaSource.isTypeSupported("video/mp4; codecs=\"" + c + "\"; width=" + w + "; height=" + h) ? "是" : "否"; };
+                var ask = function (c, w, h) { return MediaSource.isTypeSupported("video/mp4; codecs=\"" + c + "\"" + (w ? "; width=" + w + "; height=" + h : "")) ? "是" : "否"; };
+                hevcNo = ask("hev1.1.6.L120.90", 1080, 1920) === "否";
                 Log.report("解码", "H.264 上限 " + (Feed.h264Cap() || "无") + "；尺寸问询 avc1 1920x1080=" + ask("avc1.640028", 1920, 1080) + " 1080x1920=" +
-                           ask("avc1.640028", 1080, 1920) + " 540x960=" + ask("avc1.64001f", 540, 960) + "，hev1 1080x1920=" + ask("hev1.1.6.L120.90", 1080, 1920));
+                           ask("avc1.640028", 1080, 1920) + " 540x960=" + ask("avc1.64001f", 540, 960) + "，hev1 1080x1920=" + (hevcNo ? "否" : "是") +
+                           " 720x1280=" + ask("hev1.1.6.L120.90", 720, 1280) + " 540x960=" + ask("hev1.1.6.L120.90", 540, 960) + " 1920x1080=" + ask("hev1.1.6.L120.90", 1920, 1080) +
+                           " 不带尺寸=" + ask("hev1.1.6.L120.90") + "，hvc1 1080x1920=" + ask("hvc1.1.6.L120.90", 1080, 1920) + (hevcNo ? "：直播按尺寸挑档" : ""));
             } catch (e) {}
             Mse.on("ended", function () { if (item && engine === "mse" && !pendingLive && handlers.ended) { handlers.ended(); } });
             Mse.on("error", function (why) { if (item && engine === "mse" && !pendingLive && handlers.error) { handlers.error(why); } });
@@ -552,6 +702,7 @@ var Player = (function () {
          * 也不用冷启动 —— 拆掉的那一版每次从「我」回来都要 ~2.5 秒（冷启动 + 从中间 seek）。那几个页面是
          * 不透明的整屏面板，停着的画面盖得住。release=true 才真拆（msespike 要独占解码器）。 */
         stop: function (release) {
+            leaveLive();
             gen++;
             item = null;
             clearTimeout(flvTimer);
@@ -571,6 +722,12 @@ var Player = (function () {
         setMoovAB: function (on) { moovAB = !!on; },
         /* 自测 --tall：高过 1088 的 H.264 一到画面就当它解码失败（配合 Feed.stTall("learn")）。 */
         stFailTall: function (on) { stFailTall = !!on; if (on) { tallOk = false; } },
+        /* 自测 --livecodec：参考机的问询答 hev1 1080x1920=是、什么都解得了，所以假装（见 stLive 那行注释）。"narrow" 和 "" 把这次运行学到的
+         * 挑档限制清掉，"nohevc" / "none" 接着上一步学到的。 */
+        stLive: function (mode) {
+            stLive = mode || "";
+            if (!mode || mode === "narrow") { liveBad = {h265: Infinity, h264: Infinity}; liveOkTold = {}; roomTried = {room: "", q: {}}; }
+        },
         /* 给自测读的快照，不改任何状态。 */
         /* 时间、时长、尺寸都是这一条自己的：MSE 下 currentTime 带槽的偏移，videoWidth/Height 停在第一条。 */
         state: function () {
@@ -582,6 +739,8 @@ var Player = (function () {
                      dur: relDur(), readyState: el.readyState, engine: engine,
                      paused: el.paused, shown: told, sinceSwitch: Date.now() - switchAt,
                      meta: marks.loadedmetadata || 0, warm: usedWarm,
+                     /* 直播：放的是哪一档、是不是挑档挑出来的、这个直播间降了几档 */
+                     live: liveS ? {q: liveS.q, codec: liveS.codec, w: liveS.w, h: liveS.h, picked: livePicked, steps: liveSteps} : null,
                      box: boxAt >= switchAt ? Date.now() - boxAt : -1 };   // 这次切换改了框的话，改了多久
         }
     };

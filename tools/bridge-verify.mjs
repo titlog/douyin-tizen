@@ -3,7 +3,8 @@
  * 假的框和假的 XHR，测两件只在出事时才走到、在电视上造不出来的事：
  *   - 重建签名桥时还没回来的请求：当场拒掉，GET 在新框上再发一次、由新框答（以前等满外面那 15 秒报「超时」——
  *     2026-10-28 一台电视作者资料 11 次里 8 次这样），写请求不重发；
- *   - Argus 的 403 不计入「连续 3 次失败就重建」，并且那一行说清签名 SDK 加了哪些参数、UIFID_TEMP 在不在（不报值）。
+ *   - Argus 的 403 不计入「连续 3 次失败就重建」，并且那一行说清签名 SDK 加了哪些参数、UIFID_TEMP 在不在（不报值）；
+ *   - 作品列表放行了也报一次加了哪些参数（每个接口每次运行一次，不报值），和被拦的那行对得上（2026-11-25）。
  *
  *   node tools/bridge-verify.mjs
  */
@@ -17,7 +18,7 @@ let mode = "hang", frameNo = 0, argusBody = "";
 function makeWin(n) {
   const win = { n, bdms: undefined, _SdkGlueInit() { win.bdms = { init() {} }; } };
   class XHR {
-    open(m, url) { this.m = m; this.url = url; this.responseURL = "https://www.douyin.com" + url + (mode === "argus" ? "&a_bogus=x&msToken=y" : ""); }
+    open(m, url) { this.m = m; this.url = url; this.responseURL = "https://www.douyin.com" + url + (mode === "argus" ? "&a_bogus=x&msToken=y" : mode === "signed" ? "&a_bogus=x&uifid=abc&verifyFp=v" : ""); }
     setRequestHeader() {}
     send() {
       if (mode === "hang") { pending.push(this); return; }
@@ -87,4 +88,14 @@ mode = "argus"; argusBody = "something else";
 for (let i = 0; i < 3; i++) { await B.get("/aweme/v1/web/aweme/post/", {}).catch(() => {}); }
 await new Promise((r) => setTimeout(r, 30));
 assert.equal(frameNo, framesBefore + 1, "three ordinary failures rebuild");
-console.log("✓ bridge: rebuild rejects in-flight (GET re-sent, POST not), Argus not counted, Argus line names params\n  " + line);
+
+// 5. A list that got through says once what the SDK added (2026-11-25: to compare with the Argus line), without the values.
+mode = "signed";
+await B.get("/aweme/v1/web/aweme/post/", {});
+await B.get("/aweme/v1/web/aweme/post/", {});
+const passed = logs.filter((l) => /放行了（aweme\/post\/）/.test(l));
+assert.equal(passed.length, 1, "once per path per run: " + passed.join(" / "));
+assert.ok(/加上的参数\[a_bogus,uifid,verifyFp\] UIFID_TEMP 在，和 uifid 一样/.test(passed[0]), passed[0]);
+assert.ok(!/abc|=x/.test(passed[0]), "no values in the line: " + passed[0]);
+console.log("✓ bridge: rebuild rejects in-flight (GET re-sent, POST not), Argus not counted, Argus line names params, a pass says once what was added\n  " +
+  line + "\n  " + passed[0]);
