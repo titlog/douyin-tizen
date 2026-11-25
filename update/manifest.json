@@ -1,4 +1,4 @@
 {
- "manifest": "{\"version\":\"1.4.9\",\"shell\":1,\"sha256\":\"b53eba437d877ecf32af9238a4a3451b5bfe56816798951b7c70c96d669b0175\",\"size\":912781,\"date\":\"2026-11-14T12:02:13.683Z\",\"urls\":[\"https://diag.titdev.nl/v1/update/douyin-tizen/bundle-1.4.9.json\",\"https://cdn.jsdelivr.net/gh/titlog/douyin-tizen@v1.4.9/update/bundle-1.4.9.json\",\"https://raw.githubusercontent.com/titlog/douyin-tizen/v1.4.9/update/bundle-1.4.9.json\"]}",
- "sig": "L8T3suZMgwzHbBSl4IkmQhu4Hw5znSeA7NAy2/EeCxR75Gm2TRy0OIESj+0JPoUl7vHOukM+1JcRP2lr+ckIdQ=="
+ "manifest": "{\"version\":\"1.4.10\",\"shell\":1,\"sha256\":\"2792c16567d457e0c2be5b5b3844cd403a8ca7f5e364580d73478cd57690349f\",\"size\":940701,\"date\":\"2026-11-25T13:49:11.620Z\",\"urls\":[\"https://diag.titdev.nl/v1/update/douyin-tizen/bundle-1.4.10.json\",\"https://cdn.jsdelivr.net/gh/titlog/douyin-tizen@v1.4.10/update/bundle-1.4.10.json\",\"https://raw.githubusercontent.com/titlog/douyin-tizen/v1.4.10/update/bundle-1.4.10.json\"]}",
+ "sig": "4G6AWGcBsUPN34hG9k3e2+XXx0ROJSBLm7dgLKmfxF59HSAhzGb6U3KYJuiLMroCHiDKjF5bxagYiCMs9VZdlA=="
 }
